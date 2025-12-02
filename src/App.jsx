@@ -1,58 +1,74 @@
-import React, { useState } from 'react';
-import { Clock, Calendar, X, Trash2, Edit2, Plus, ArrowLeft, Info, AlertCircle, Infinity, User } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { 
+  Clock, Calendar, X, Trash2, Edit2, Plus, 
+  ArrowLeft, Info, AlertCircle, Infinity, User, 
+  LayoutDashboard, Armchair, Settings, LogOut, 
+  Search, Bell, Moon, Sun, Monitor, DollarSign,
+  CheckCircle, History, TrendingUp, Receipt, Play
+} from 'lucide-react';
 
 const App = () => {
-  // Initial state for tables
+  // --- CONSTANTS ---
+  const HOURLY_RATE = 200;
+  const RESERVATION_FEE = 50;
+
+  // --- STATE ---
   const [tables, setTables] = useState([
-    { id: 1, name: 'Table 1', status: 'Available', occupiedUntil: null },
-    { id: 2, name: 'Table 2', status: 'Available', occupiedUntil: null },
-    { id: 3, name: 'Table 3', status: 'Available', occupiedUntil: null },
-    { id: 4, name: 'Table 4', status: 'Available', occupiedUntil: null },
-    { id: 5, name: 'Table 5', status: 'Available', occupiedUntil: null },
-    { id: 6, name: 'Table 6', status: 'Available', occupiedUntil: null },
+    { id: 1, name: 'Table 1', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
+    { id: 2, name: 'Table 2', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
+    { id: 3, name: 'Table 3', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
+    { id: 4, name: 'Table 4', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
+    { id: 5, name: 'Table 5', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
+    { id: 6, name: 'Table 6', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
   ]);
 
   const [reservations, setReservations] = useState([]);
-  const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard' or 'management'
+  const [history, setHistory] = useState([]); 
+  const [currentView, setCurrentView] = useState('dashboard'); 
+  const [darkMode, setDarkMode] = useState(true);
+  const [startingReservationId, setStartingReservationId] = useState(null); // Track if we are starting a specific reservation
   
-  // Modal State
+  // Modal & Form State
   const [showModal, setShowModal] = useState(false);
   const [selectedTable, setSelectedTable] = useState(null);
-  const [modalType, setModalType] = useState(null); // 'reserve', 'walkin', 'edit'
-  
-  // Form Data State
+  const [modalType, setModalType] = useState(null); 
   const [formData, setFormData] = useState({
     guestName: '',
-    date: '',
+    date: new Date().toISOString().split('T')[0],
     time: '',
-    duration: 1, // Default 1 hour for walk-in
-    isOpenTime: false, // New state for Open Time
+    duration: 1,
+    isOpenTime: false,
   });
-
   const [error, setError] = useState('');
-
-  // Management State
   const [newTableName, setNewTableName] = useState('');
 
-  // --- NAVIGATION ---
-  const toggleView = () => {
-    setCurrentView(currentView === 'dashboard' ? 'management' : 'dashboard');
-    resetForm();
-    setNewTableName('');
-  };
-
+  // --- ACTIONS ---
   const resetForm = () => {
     setFormData({
       guestName: '',
-      date: new Date().toISOString().split('T')[0], // Default today
+      date: new Date().toISOString().split('T')[0],
       time: '',
       duration: 1,
       isOpenTime: false
     });
     setError('');
+    setStartingReservationId(null);
   };
 
-  // --- ACTIONS (Dashboard) ---
+  const addToHistory = (item, status, amount = 0) => {
+    const newEntry = {
+      id: Date.now(),
+      tableName: item.tableName || item.name,
+      guestName: item.guestName || 'Walk-In',
+      date: new Date().toLocaleDateString(),
+      time: new Date().toLocaleTimeString(),
+      type: item.type || 'Session',
+      status: status, 
+      amount: amount
+    };
+    setHistory(prev => [newEntry, ...prev]);
+  };
+
   const handleWalkInClick = (table) => {
     setSelectedTable(table);
     setModalType('walkin');
@@ -67,17 +83,76 @@ const App = () => {
     setShowModal(true);
   };
 
-  const resetTable = (id) => {
+  // *** NEW: Start a reservation ***
+  const handleStartReservation = (res) => {
+    const table = tables.find(t => t.name === res.tableName);
+    if (!table) return;
+
+    if (table.status === 'Occupied') {
+      alert(`Cannot start reservation. ${table.name} is currently occupied.`);
+      return;
+    }
+
+    setSelectedTable(table);
+    setModalType('walkin');
+    setFormData({
+      guestName: res.guestName,
+      date: new Date().toISOString().split('T')[0],
+      time: '',
+      duration: 1,
+      isOpenTime: false
+    });
+    setStartingReservationId(res.id); // Mark this walk-in as coming from a reservation
+    setShowModal(true);
+  };
+
+  const handleFinishSession = (table) => {
+    let cost = 0;
+    
+    // Calculate final cost
+    if (table.sessionType === 'walkin') {
+       if (table.isOpenTime) {
+          cost = HOURLY_RATE; 
+       } else {
+          cost = (table.duration || 1) * HOURLY_RATE;
+       }
+    }
+
+    // *** DEDUCT RESERVATION FEE ***
+    if (table.deductible) {
+      cost = Math.max(0, cost - table.deductible);
+    }
+    
     setTables(tables.map(t => 
-      t.id === id ? { ...t, status: 'Available', occupiedUntil: null } : t
+      t.id === table.id ? { 
+        ...t, 
+        status: 'Available', 
+        occupiedUntil: null, 
+        occupiedUntilRaw: null, 
+        currentSessionStart: null, 
+        sessionType: null, 
+        duration: null, 
+        isOpenTime: false,
+        deductible: 0 // Reset deductible
+      } : t
     ));
+    
+    addToHistory({ tableName: table.name, type: 'Walk-In', guestName: table.currentGuest }, 'Completed', cost);
+  };
+
+  const resetTable = (id) => {
+    const table = tables.find(t => t.id === id);
+    if(table) handleFinishSession(table);
   };
 
   const handleCancelReservation = (id) => {
-    setReservations(reservations.filter(r => r.id !== id));
+    const res = reservations.find(r => r.id === id);
+    if (res) {
+      addToHistory({ ...res, type: 'Reservation' }, 'Canceled', 0);
+      setReservations(reservations.filter(r => r.id !== id));
+    }
   };
 
-  // --- ACTIONS (Management) ---
   const handleAddTable = () => {
     if (!newTableName.trim()) return;
     const newId = tables.length > 0 ? Math.max(...tables.map(t => t.id)) + 1 : 1;
@@ -87,10 +162,8 @@ const App = () => {
 
   const handleDeleteTable = (id) => {
     const tableToDelete = tables.find(t => t.id === id);
-    const hasActiveReservation = reservations.some(r => r.tableName === tableToDelete.name);
-    
-    if (hasActiveReservation || tableToDelete.status === 'Occupied') {
-      alert("Cannot delete table with active status or upcoming reservations.");
+    if (tableToDelete.status === 'Occupied') {
+      alert("Cannot delete occupied table.");
       return;
     }
     setTables(tables.filter(t => t.id !== id));
@@ -99,18 +172,15 @@ const App = () => {
   const openEditModal = (table) => {
     setSelectedTable(table);
     setModalType('edit');
-    setFormData({ ...formData, guestName: table.name }); // reusing guestName for table name editing
+    setFormData({ ...formData, guestName: table.name });
     setShowModal(true);
   };
 
-  // --- LOGIC: TIME & CONFLICTS ---
-
-  // Helper to find the next reservation TODAY for a specific table
+  // --- LOGIC HELPER ---
   const getNextTodayReservation = (table) => {
     if (!table) return null;
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
-    
     const todaysReservations = reservations
       .filter(r => r.tableName === table.name && r.rawDate === todayStr)
       .map(res => {
@@ -119,18 +189,15 @@ const App = () => {
         start.setHours(h, m, 0, 0);
         return { ...res, startObj: start };
       })
-      .filter(res => res.startObj > now) // Only future reservations
-      .sort((a, b) => a.startObj - b.startObj); // Sort by soonest
-
+      .filter(res => res.startObj > now)
+      .sort((a, b) => a.startObj - b.startObj);
     return todaysReservations.length > 0 ? todaysReservations[0] : null;
   };
 
-  // Helper to format duration in H and M
   const formatDuration = (diffMs) => {
     const hours = Math.floor(diffMs / (1000 * 60 * 60));
     const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    
-    if (hours > 0 && minutes > 0) return `${hours}H and ${minutes}M`;
+    if (hours > 0 && minutes > 0) return `${hours}H ${minutes}M`;
     if (hours > 0) return `${hours}H`;
     return `${minutes}M`;
   };
@@ -139,39 +206,26 @@ const App = () => {
     const now = new Date();
     const nextRes = getNextTodayReservation(table);
 
-    // 1. Check Logic for OPEN TIME
     if (isOpenTime) {
       if (nextRes) {
-        // Calculate hours until reservation
         const diffMs = nextRes.startObj - now;
         const diffHours = diffMs / (1000 * 60 * 60);
-
-        if (diffHours < 1) {
-           return `Cannot select Open Time. Less than 1 hour (${formatDuration(diffMs)}) available before reservation at ${convertTo12Hour(nextRes.rawTime)}.`;
-        }
-        // It is allowed, but we will cap the time in handleConfirm
+        if (diffHours < 1) return `Less than 1 hour (${formatDuration(diffMs)}) available before reservation.`;
         return null; 
       }
       return null;
     }
 
-    // 2. Check Logic for STANDARD DURATION
     const walkInEnd = new Date(now.getTime() + durationHours * 60 * 60 * 1000);
-    
-    // Filter reservations for this table that are happening TODAY
     const todayStr = now.toISOString().split('T')[0];
-    const todaysReservations = reservations.filter(
-      r => r.tableName === table.name && r.rawDate === todayStr
-    );
+    const todaysReservations = reservations.filter(r => r.tableName === table.name && r.rawDate === todayStr);
     
     for (const res of todaysReservations) {
-      const [resHours, resMinutes] = res.rawTime.split(':').map(Number);
+      const [h, m] = res.rawTime.split(':').map(Number);
       const resStart = new Date(now);
-      resStart.setHours(resHours, resMinutes, 0, 0);
-
+      resStart.setHours(h, m, 0, 0);
       if (walkInEnd > resStart && resStart > now) {
-         const diffMs = resStart - now;
-         return `Conflict! Only ${formatDuration(diffMs)} available before reservation at ${convertTo12Hour(res.rawTime)}`;
+         return `Conflict! Only ${formatDuration(resStart - now)} available.`;
       }
     }
     return null;
@@ -183,70 +237,86 @@ const App = () => {
     let h = parseInt(hours, 10);
     const ampm = h >= 12 ? 'PM' : 'AM';
     h = h % 12;
-    h = h ? h : 12; // the hour '0' should be '12'
+    h = h ? h : 12;
     return `${h}:${minutes} ${ampm}`;
   };
 
-  // --- SHARED MODAL LOGIC ---
   const handleConfirm = () => {
     setError('');
-
+    
+    // --- EDIT NAME ---
     if (modalType === 'edit') {
       if (!formData.guestName.trim()) return;
-      setTables(tables.map(t => 
-        t.id === selectedTable.id ? { ...t, name: formData.guestName } : t
-      ));
+      setTables(tables.map(t => t.id === selectedTable.id ? { ...t, name: formData.guestName } : t));
       closeModal();
       return;
     }
 
+    // --- SHARED NAME VALIDATION ---
     if (modalType === 'reserve' && !formData.guestName.trim()) {
-      setError('Please enter a name for the reservation');
+      setError('Please enter a name');
       return;
     }
-
+    
+    // --- WALK-IN LOGIC ---
     if (modalType === 'walkin') {
       const conflictMsg = checkWalkInConflict(selectedTable, Number(formData.duration), formData.isOpenTime);
-      if (conflictMsg) {
-        setError(conflictMsg);
-        return;
-      }
-
-      // No conflict, proceed
-      let occupiedUntilStr = '';
+      if (conflictMsg) { setError(conflictMsg); return; }
       
+      let occupiedUntilStr = '';
+      let occupiedUntilRaw = null; 
+
       if (formData.isOpenTime) {
-        // If Open Time, check if we need to cap it at the next reservation
         const nextRes = getNextTodayReservation(selectedTable);
-        if (nextRes) {
-           occupiedUntilStr = convertTo12Hour(nextRes.rawTime); // Stop at reservation time
-        } else {
-           occupiedUntilStr = 'Open Time';
-        }
+        occupiedUntilStr = nextRes ? convertTo12Hour(nextRes.rawTime) : 'Open Time';
+        occupiedUntilRaw = nextRes ? nextRes.startObj : null; 
       } else {
         const endTime = new Date(Date.now() + Number(formData.duration) * 60 * 60 * 1000);
         occupiedUntilStr = endTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        occupiedUntilRaw = endTime;
       }
 
-      setTables(tables.map(t => 
-        t.id === selectedTable.id ? { 
-          ...t, 
-          status: 'Occupied', 
-          occupiedUntil: occupiedUntilStr
-        } : t
-      ));
+      // Determine Deduction
+      const deductionAmount = startingReservationId ? RESERVATION_FEE : 0;
+
+      // Calculate approximate cost for history tracking later
+      const estimatedCost = formData.isOpenTime ? 0 : (Number(formData.duration) * HOURLY_RATE);
+
+      setTables(tables.map(t => t.id === selectedTable.id ? { 
+        ...t, 
+        status: 'Occupied', 
+        occupiedUntil: occupiedUntilStr,
+        occupiedUntilRaw: occupiedUntilRaw,
+        sessionType: 'walkin',
+        estimatedCost: estimatedCost,
+        duration: Number(formData.duration),
+        isOpenTime: formData.isOpenTime,
+        currentGuest: formData.guestName,
+        deductible: deductionAmount // Store the 50 fee to deduct later
+      } : t));
+      
+      // If we started a reservation, remove it from the reservation list
+      if (startingReservationId) {
+        setReservations(reservations.filter(r => r.id !== startingReservationId));
+      }
+      
       closeModal();
-    } 
-    else if (modalType === 'reserve') {
-      if (!formData.date || !formData.time) {
-        setError('Please select both date and time');
-        return;
-      }
 
-      const [h, m] = formData.time.split(':').map(Number);
-      if (h < 7) {
-        setError('Reservations are only allowed between 7:00 AM and 11:59 PM.');
-        return;
+    } 
+    // --- RESERVATION LOGIC ---
+    else if (modalType === 'reserve') {
+      if (!formData.date || !formData.time) { setError('Select date and time'); return; }
+      const [h] = formData.time.split(':').map(Number);
+      if (h < 7) { setError('Reservations allow 7 AM - 11:59 PM.'); return; }
+      
+      if (selectedTable.status === 'Occupied' && selectedTable.occupiedUntilRaw) {
+        const reservationStart = new Date(`${formData.date}T${formData.time}`);
+        const isToday = new Date().toDateString() === new Date(formData.date).toDateString();
+        
+        if (isToday && reservationStart < selectedTable.occupiedUntilRaw) {
+          setError(`Conflict! Table is occupied until ${selectedTable.occupiedUntil}.`);
+          return;
+        }
       }
 
       const newReservation = {
@@ -256,33 +326,29 @@ const App = () => {
         rawDate: formData.date,
         rawTime: formData.time,
         displayDate: new Date(formData.date).toLocaleDateString(),
-        displayTime: convertTo12Hour(formData.time)
+        displayTime: convertTo12Hour(formData.time),
+        type: 'Reservation',
+        amount: RESERVATION_FEE
       };
       
-      setReservations([...reservations, newReservation].sort((a,b) => {
-         return new Date(`${a.rawDate}T${a.rawTime}`) - new Date(`${b.rawDate}T${b.rawTime}`);
-      }));
+      setReservations([...reservations, newReservation].sort((a,b) => new Date(`${a.rawDate}T${a.rawTime}`) - new Date(`${b.rawDate}T${b.rawTime}`)));
+      addToHistory(newReservation, 'Reserved', RESERVATION_FEE);
       closeModal();
     }
   };
 
   const handleOpenTimeToggle = () => {
-    // Check constraints before toggling ON
     if (!formData.isOpenTime) {
       const nextRes = getNextTodayReservation(selectedTable);
       if (nextRes) {
-        const now = new Date();
-        const diffMs = nextRes.startObj - now;
-        const diffHours = diffMs / (1000 * 60 * 60);
-        
+        const diffHours = (nextRes.startObj - new Date()) / (1000 * 60 * 60);
         if (diffHours < 1) {
-          setError(`Cannot select Open Time. Only ${formatDuration(diffMs)} available until reservation at ${convertTo12Hour(nextRes.rawTime)}.`);
+          setError(`Only ${formatDuration(nextRes.startObj - new Date())} available.`);
           return;
         }
       }
     }
-    
-    setError(''); // Clear errors if toggling or if valid
+    setError('');
     setFormData({...formData, isOpenTime: !formData.isOpenTime});
   };
 
@@ -291,444 +357,534 @@ const App = () => {
     setSelectedTable(null);
     setModalType(null);
     setError('');
+    setStartingReservationId(null);
   };
 
-  // -- Render Helper for Modal Warning --
-  const renderOpenTimeWarning = () => {
-     if (modalType !== 'walkin' || !formData.isOpenTime) return null;
-     
-     const nextRes = getNextTodayReservation(selectedTable);
-     if (nextRes) {
-       const now = new Date();
-       const diffMs = nextRes.startObj - now;
-       
-       return (
-         <div className="bg-[#F8D49B]/20 border border-[#F8D49B] rounded-xl p-3 flex items-start gap-2 mt-3 animate-in fade-in zoom-in-95">
-           <AlertCircle className="w-5 h-5 text-[#F8BC9B] flex-shrink-0 mt-0.5" />
-           <div className="text-sm text-slate-600">
-             <p className="font-semibold">Note: Upcoming Reservation</p>
-             <p>Table reserved at <span className="font-bold">{convertTo12Hour(nextRes.rawTime)}</span>.</p>
-             <p>Playtime available: <span className="font-bold">{formatDuration(diffMs)}</span>.</p>
-           </div>
-         </div>
-       );
-     }
-     return null;
+  // --- DERIVED STATS ---
+  const totalEarnings = useMemo(() => {
+    return history.reduce((sum, item) => item.status !== 'Canceled' ? sum + item.amount : sum, 0);
+  }, [history]);
+
+  // --- THEME CLASSES ---
+  const theme = {
+    bg: darkMode ? 'bg-[#0f172a]' : 'bg-[#f8fafc]',
+    text: darkMode ? 'text-[#f1f5f9]' : 'text-[#0f172a]',
+    textMuted: darkMode ? 'text-[#94a3b8]' : 'text-[#64748b]',
+    sidebar: darkMode ? 'bg-[#1e293b] border-[#334155]' : 'bg-white border-slate-200',
+    card: darkMode ? 'bg-[#1e293b] border-[#334155]' : 'bg-white border-slate-200',
+    input: darkMode ? 'bg-[#0f172a] border-[#334155] text-white' : 'bg-white border-slate-200 text-[#0f172a]',
+    header: darkMode ? 'bg-[#1e293b]/50 border-[#334155]' : 'bg-white/80 border-slate-200',
+    subCard: darkMode ? 'bg-[#0f172a] border-[#334155]' : 'bg-slate-50 border-slate-100',
+    tableHeader: darkMode ? 'bg-[#0f172a] text-[#94a3b8]' : 'bg-slate-50 text-slate-500'
   };
 
   return (
-    <div className="min-h-screen font-sans text-slate-700 p-4 md:p-8 relative overflow-hidden bg-[#fdfbf7]">
+    <div className={`flex h-screen font-sans overflow-hidden transition-colors duration-300 ${theme.bg} ${theme.text}`}>
       
-      {/* Soft Gradient Background */}
-      <div className="fixed inset-0 bg-gradient-to-br from-[#75BDE0]/5 via-[#F8D49B]/5 to-[#F89B9B]/5 -z-10 pointer-events-none"></div>
+      {/* --- SIDEBAR --- */}
+      <aside className={`w-64 border-r flex flex-col hidden md:flex ${theme.sidebar}`}>
+        <div className="p-6 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#75BDE0] to-[#F8BC9B] flex items-center justify-center text-[#0f172a] font-bold text-xl shadow-lg">8B</div>
+          <h1 className={`text-xl font-bold tracking-tight ${theme.text}`}>Club Manager</h1>
+        </div>
 
-      {/* Header */}
-      <header className="text-center mb-12 animate-in fade-in slide-in-from-top-4 duration-700">
-        <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-[#75BDE0] to-[#F89B9B] mb-3 drop-shadow-sm">
-          8-Ball Billiards Club
-        </h1>
-        <p className="text-slate-400 text-xl font-medium">Reserve your table for the perfect game</p>
-        
-        <div className="mt-8 flex justify-center">
+        <nav className="flex-1 px-4 space-y-2 mt-4">
           <button 
-            onClick={toggleView}
-            className="group relative bg-white pl-5 pr-6 py-3 rounded-full shadow-md hover:shadow-xl border border-[#F8D49B] hover:border-[#F89B9B] transition-all flex items-center gap-3 font-semibold text-slate-600 hover:text-[#75BDE0] overflow-hidden"
+            onClick={() => setCurrentView('dashboard')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'dashboard' 
+                ? 'bg-[#75BDE0] text-[#0f172a] font-bold shadow-lg shadow-[#75BDE0]/20' 
+                : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+            }`}
           >
-            <div className="absolute inset-0 bg-gradient-to-r from-[#75BDE0]/10 to-[#F89B9B]/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-            <span className="relative flex items-center gap-2 z-10">
-            {currentView === 'dashboard' ? (
-              <>Table Management</>
-            ) : (
-              <><ArrowLeft className="w-5 h-5 transition-transform group-hover:-translate-x-1" /> Back to Reservations</>
-            )}
-            </span>
+            <LayoutDashboard className="w-5 h-5" /> Dashboard
+          </button>
+          
+          <button 
+            onClick={() => setCurrentView('management')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'management' 
+                ? 'bg-[#F8D49B] text-[#0f172a] font-bold shadow-lg shadow-[#F8D49B]/20' 
+                : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+            }`}
+          >
+            <Armchair className="w-5 h-5" /> Tables
+          </button>
+
+          <button 
+            onClick={() => setCurrentView('earnings')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'earnings' 
+                ? 'bg-[#F89B9B] text-[#0f172a] font-bold shadow-lg shadow-[#F89B9B]/20' 
+                : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+            }`}
+          >
+            <DollarSign className="w-5 h-5" /> Earnings
+          </button>
+
+          <button 
+            onClick={() => setCurrentView('settings')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'settings' 
+                ? 'bg-[#F8BC9B] text-[#0f172a] font-bold shadow-lg shadow-[#F8BC9B]/20' 
+                : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+            }`}
+          >
+            <Settings className="w-5 h-5" /> Settings
+          </button>
+        </nav>
+
+        <div className={`p-4 border-t ${darkMode ? 'border-[#334155]' : 'border-slate-200'}`}>
+          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#F89B9B] hover:bg-[#F89B9B]/10 transition-all font-medium">
+            <LogOut className="w-5 h-5" /> Logout
           </button>
         </div>
-      </header>
+      </aside>
 
-      {/* --- DASHBOARD VIEW --- */}
-      {currentView === 'dashboard' && (
-        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {/* --- MAIN CONTENT --- */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        
+        {/* Top Header */}
+        <header className={`h-20 backdrop-blur-sm border-b flex items-center justify-between px-8 ${theme.header}`}>
+          <h2 className={`text-2xl font-bold ${theme.text}`}>
+            {currentView.charAt(0).toUpperCase() + currentView.slice(1)}
+          </h2>
           
-          {/* Left Column: Available Tables */}
-          <div className="lg:col-span-2 space-y-8">
-            <h2 className="text-2xl font-bold text-slate-700 pl-2 flex items-center gap-2">
-              <div className="w-2 h-8 bg-[#75BDE0] rounded-full"></div>
-              Available Tables
-            </h2>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {tables.map((table) => (
-                <div 
-                  key={table.id} 
-                  className={`relative p-6 rounded-3xl shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden group ${
-                    table.status === 'Available' 
-                      ? 'bg-white border border-[#75BDE0]/30' 
-                      : 'bg-slate-50 border border-slate-200 opacity-90'
-                  }`}
-                >
-                  {/* Background Pattern */}
-                  <div className="absolute right-0 top-0 -mt-4 -mr-4 text-[#75BDE0]/10 opacity-20 group-hover:opacity-30 transition-opacity duration-500 pointer-events-none">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-club"><path d="M17.28 9.05a5.5 5.5 0 1 0-10.56 0A5.5 5.5 0 1 0 12 17.66a5.5 5.5 0 1 0 5.28-8.6Z"/></svg>
-                  </div>
-
-                  <div className="flex justify-between items-start mb-6 relative z-10">
-                    <span className="font-bold text-xl text-slate-700">{table.name}</span>
-                    <div className="text-right">
-                      <span className={`px-4 py-1.5 rounded-full text-sm font-bold shadow-sm ${
-                        table.status === 'Available' 
-                          ? 'bg-[#75BDE0] text-white' 
-                          : 'bg-[#F89B9B] text-white'
-                      }`}>
-                        {table.status}
-                      </span>
-                      {table.status === 'Occupied' && table.occupiedUntil && (
-                        <p className="text-sm font-medium text-[#F89B9B] mt-2 flex items-center justify-end gap-1.5">
-                          {table.occupiedUntil === 'Open Time' ? (
-                            <><Infinity className="w-4 h-4 text-[#F89B9B]" /> <span className="text-[#F89B9B]">Open Time</span></>
-                          ) : (
-                            <><Clock className="w-4 h-4" /> Until {table.occupiedUntil}</>
-                          )}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-4 relative z-10">
-                    {table.status === 'Available' ? (
-                      <>
-                        <button
-                          onClick={() => handleReserveClick(table)}
-                          className="flex-1 bg-[#75BDE0] hover:bg-[#64a9cc] text-white py-3 rounded-2xl text-sm font-bold transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0"
-                        >
-                          Reserve
-                        </button>
-                        <button
-                          onClick={() => handleWalkInClick(table)}
-                          className="flex-1 bg-[#F8BC9B] hover:bg-[#e6ab8c] text-white py-3 rounded-2xl text-sm font-bold transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0"
-                        >
-                          Walk-In
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => resetTable(table.id)}
-                        className="w-full bg-white hover:bg-slate-50 text-slate-500 font-bold py-3 rounded-2xl text-sm transition-all shadow-sm border border-slate-200 hover:border-slate-300 hover:shadow-md"
-                      >
-                        Reset to Available
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+          <div className="flex items-center gap-6">
+            <div className="relative hidden sm:block">
+              <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${theme.textMuted}`} />
+              <input 
+                type="text" 
+                placeholder="Search..." 
+                className={`${theme.input} text-sm rounded-full pl-10 pr-4 py-2 focus:outline-none focus:border-[#75BDE0] w-64 transition-colors`}
+              />
             </div>
+            {/* Removed Icons as requested */}
           </div>
+        </header>
 
-          {/* Right Column: Upcoming Reservations */}
-          <div className="lg:col-span-1 space-y-8">
-            <h2 className="text-2xl font-bold text-slate-700 pl-2 flex items-center gap-2">
-              <div className="w-2 h-8 bg-[#F89B9B] rounded-full"></div>
-              Upcoming Reservations
-            </h2>
-            
-            <div className="bg-white/80 backdrop-blur-sm p-6 rounded-3xl shadow-sm border border-[#F8D49B]/30 min-h-[400px] relative overflow-hidden">
-              {/* Background Illustration */}
-              <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
-                <Calendar className="w-48 h-48 text-[#75BDE0]" />
-              </div>
-
-              {reservations.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center relative z-10 p-8">
-                  <div className="w-20 h-20 bg-[#F8D49B]/20 rounded-full flex items-center justify-center mb-4">
-                    <Calendar className="w-10 h-10 text-[#F8BC9B]" />
-                  </div>
-                  <p className="text-slate-600 text-lg font-medium">No upcoming reservations</p>
-                  <p className="text-slate-400 text-sm">Your schedule is clear for now.</p>
+        {/* Content Scroll Area */}
+        <div className="flex-1 overflow-y-auto p-8">
+          
+          {/* DASHBOARD VIEW */}
+          {currentView === 'dashboard' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 max-w-7xl mx-auto">
+              
+              <div className="xl:col-span-2 space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className={`text-lg font-bold flex items-center gap-2 ${theme.text}`}>
+                    <div className="w-1.5 h-6 bg-[#75BDE0] rounded-full"></div>
+                    Available Tables
+                  </h3>
+                  <span className={`text-sm ${theme.textMuted}`}>{tables.filter(t => t.status === 'Available').length} available now</span>
                 </div>
-              ) : (
-                <div className="space-y-4 relative z-10">
-                  {reservations.map((res) => (
-                    <div key={res.id} className="group relative p-5 bg-white rounded-2xl border border-[#F8D49B]/30 shadow-sm hover:shadow-md transition-all animate-in fade-in slide-in-from-bottom-2">
-                       {/* Trash Can Button (Shows on Hover) */}
-                      <button 
-                        onClick={() => handleCancelReservation(res.id)}
-                        className="absolute top-3 right-3 p-2 text-slate-300 hover:text-[#F89B9B] bg-transparent hover:bg-[#F89B9B]/10 rounded-xl transition-all opacity-0 group-hover:opacity-100 hover:shadow-sm"
-                        title="Cancel Reservation"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
 
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-start gap-3">
-                          <div className="w-10 h-10 bg-[#75BDE0]/20 rounded-full flex items-center justify-center">
-                            <User className="w-5 h-5 text-[#75BDE0]" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {tables.map(table => (
+                    <div key={table.id} className={`${theme.card} rounded-2xl p-5 shadow-sm hover:shadow-lg transition-all duration-300 group relative overflow-hidden border`}>
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-4">
+                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold shadow-inner ${
+                            table.status === 'Available' ? 'bg-[#75BDE0]/20 text-[#75BDE0]' : 'bg-[#F89B9B]/20 text-[#F89B9B]'
+                          }`}>
+                            {table.id}
                           </div>
                           <div>
-                            <p className="font-bold text-lg text-slate-700">{res.guestName}</p>
-                            <p className="text-sm font-medium text-[#F8BC9B]">{res.tableName}</p>
+                            <h4 className={`font-bold text-lg ${theme.text}`}>{table.name}</h4>
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                              table.status === 'Available' ? 'bg-[#75BDE0]/10 text-[#75BDE0]' : 'bg-[#F89B9B]/10 text-[#F89B9B]'
+                            }`}>
+                              {table.status}
+                            </span>
                           </div>
                         </div>
-                        <div className="text-right mr-10">
-                           <div className="font-bold text-[#75BDE0] mb-1">{res.displayDate}</div>
-                           <div className="flex items-center justify-end text-sm font-medium text-slate-600 bg-slate-50 px-3 py-1 rounded-lg">
-                            <Clock className="w-4 h-4 mr-1.5 text-[#F89B9B]" />
-                            {res.displayTime}
+                        {table.status === 'Occupied' && (
+                          <div className="text-right">
+                            <p className={`text-[10px] font-bold uppercase tracking-wider ${theme.textMuted}`}>Occupied Until</p>
+                            <p className="text-sm font-bold text-[#F89B9B] flex items-center gap-1">
+                              {table.occupiedUntil === 'Open Time' ? <Infinity className="w-3 h-3"/> : <Clock className="w-3 h-3"/>}
+                              {table.occupiedUntil}
+                            </p>
                           </div>
-                        </div>
+                        )}
+                      </div>
+
+                      <div className="flex gap-3 pt-2">
+                        {/* Buttons Logic Updated */}
+                        {table.status === 'Available' ? (
+                          <>
+                            <button onClick={() => handleReserveClick(table)} className="flex-1 py-2.5 rounded-lg bg-[#75BDE0] hover:bg-[#64a9cc] text-white text-sm font-bold shadow-md shadow-[#75BDE0]/20 transition-all active:scale-95">Reserve</button>
+                            <button onClick={() => handleWalkInClick(table)} className="flex-1 py-2.5 rounded-lg bg-[#F8BC9B] hover:bg-[#e6ab8c] text-white text-sm font-bold shadow-md shadow-[#F8BC9B]/20 transition-all active:scale-95">Walk-In</button>
+                          </>
+                        ) : (
+                          <>
+                            {table.occupiedUntil !== 'Open Time' && (
+                               <button 
+                                 onClick={() => handleReserveClick(table)}
+                                 className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-bold transition-all ${darkMode ? 'border-[#75BDE0]/50 text-[#75BDE0]' : 'border-slate-300 text-slate-500'} hover:bg-[#75BDE0]/10`}
+                               >
+                                 Reserve
+                               </button>
+                            )}
+                            <button 
+                              onClick={() => handleFinishSession(table)}
+                              className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-bold transition-all ${darkMode ? 'border-[#94a3b8]/20 text-[#94a3b8]' : 'border-slate-300 text-slate-500'} hover:border-[#F89B9B] hover:text-[#F89B9B] hover:bg-[#F89B9B]/10`}
+                            >
+                              Finish
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+              </div>
 
-      {/* --- MANAGEMENT VIEW --- */}
-      {currentView === 'management' && (
-        <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-[#F8D49B]/30 overflow-hidden">
-              <div className="p-8 md:p-10 space-y-10">
-                
-                {/* Section Header */}
-                <div className="border-b border-slate-100 pb-6">
-                  <h2 className="text-3xl font-bold text-slate-700 flex items-center gap-3">
-                    <div className="w-3 h-10 bg-gradient-to-b from-[#75BDE0] to-[#F8BC9B] rounded-full"></div>
-                    Table Management
-                  </h2>
-                  <p className="text-slate-400 mt-2 pl-6">Add, rename, or remove tables from your club.</p>
+              <div className="xl:col-span-1 space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className={`text-lg font-bold flex items-center gap-2 ${theme.text}`}>
+                    <div className="w-1.5 h-6 bg-[#F8D49B] rounded-full"></div>
+                    Upcoming List
+                  </h3>
                 </div>
 
-                {/* Add New Table */}
-                <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-100">
-                  <label className="text-lg font-bold text-slate-700 flex items-center gap-2">
-                    <Plus className="w-5 h-5 text-[#75BDE0]" /> Add New Table
-                  </label>
-                  <div className="flex flex-col md:flex-row gap-4">
-                    <input 
-                      type="text" 
-                      value={newTableName}
-                      onChange={(e) => setNewTableName(e.target.value)}
-                      placeholder="Enter a unique table name..."
-                      className="flex-1 bg-white border border-slate-200 rounded-2xl px-5 py-4 focus:ring-2 focus:ring-[#F8D49B] focus:border-[#F8BC9B] outline-none transition-all shadow-sm text-lg text-slate-700"
-                    />
+                <div className={`${theme.card} rounded-3xl p-6 border min-h-[400px]`}>
+                  {reservations.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center py-12">
+                      <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${darkMode ? 'bg-[#334155]' : 'bg-slate-100'}`}>
+                        <Calendar className={`w-8 h-8 ${theme.textMuted}`} />
+                      </div>
+                      <p className={theme.textMuted}>No reservations today.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {reservations.map(res => (
+                        <div key={res.id} className={`group flex items-center justify-between p-4 rounded-2xl border transition-all ${theme.subCard} hover:border-[#F8D49B]/50`}>
+                          <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#75BDE0] to-[#F89B9B] p-[2px]">
+                              <div className={`w-full h-full rounded-full flex items-center justify-center ${darkMode ? 'bg-[#0f172a]' : 'bg-slate-50'}`}>
+                                <User className={`w-4 h-4 ${theme.text}`} />
+                              </div>
+                            </div>
+                            <div>
+                              <p className={`font-bold ${theme.text}`}>{res.guestName}</p>
+                              <p className={`text-xs ${theme.textMuted}`}>{res.tableName} • {res.displayDate}</p>
+                            </div>
+                          </div>
+                          <div className="text-right flex flex-col items-end gap-1">
+                            <p className="text-[#F8D49B] font-bold text-sm">{res.displayTime}</p>
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => handleStartReservation(res)}
+                                className="text-xs text-[#75BDE0] hover:text-[#F8BC9B] font-bold bg-[#75BDE0]/10 hover:bg-[#F8BC9B]/10 px-2 py-1 rounded-md transition-colors"
+                              >
+                                Start
+                              </button>
+                              <button 
+                                onClick={() => handleCancelReservation(res.id)}
+                                className="text-xs text-red-400 hover:text-red-300 transition-opacity"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* EARNINGS VIEW */}
+          {currentView === 'earnings' && (
+            <div className="max-w-7xl mx-auto space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className={`${theme.card} p-6 rounded-3xl border flex items-center gap-4`}>
+                  <div className="w-16 h-16 rounded-full bg-[#75BDE0]/20 flex items-center justify-center">
+                    <DollarSign className="w-8 h-8 text-[#75BDE0]" />
+                  </div>
+                  <div>
+                    <p className={theme.textMuted}>Total Revenue</p>
+                    <h3 className={`text-3xl font-bold ${theme.text}`}>₱{totalEarnings.toLocaleString()}</h3>
+                  </div>
+                </div>
+                <div className={`${theme.card} p-6 rounded-3xl border flex items-center gap-4`}>
+                  <div className="w-16 h-16 rounded-full bg-[#F8BC9B]/20 flex items-center justify-center">
+                    <CheckCircle className="w-8 h-8 text-[#F8BC9B]" />
+                  </div>
+                  <div>
+                    <p className={theme.textMuted}>Completed Sessions</p>
+                    <h3 className={`text-3xl font-bold ${theme.text}`}>{history.filter(h => h.status === 'Completed').length}</h3>
+                  </div>
+                </div>
+                <div className={`${theme.card} p-6 rounded-3xl border flex items-center gap-4`}>
+                  <div className="w-16 h-16 rounded-full bg-[#F89B9B]/20 flex items-center justify-center">
+                    <Calendar className="w-8 h-8 text-[#F89B9B]" />
+                  </div>
+                  <div>
+                    <p className={theme.textMuted}>Total Reservations</p>
+                    <h3 className={`text-3xl font-bold ${theme.text}`}>{history.filter(h => h.type === 'Reservation').length}</h3>
+                  </div>
+                </div>
+              </div>
+
+              <div className={`${theme.card} rounded-3xl p-8 border`}>
+                <h3 className={`text-xl font-bold mb-6 ${theme.text}`}>Recent Transactions</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className={`${theme.tableHeader} border-b ${darkMode ? 'border-[#334155]' : 'border-slate-200'}`}>
+                      <tr>
+                        <th className="pb-4 pl-4">Type</th>
+                        <th className="pb-4">Guest</th>
+                        <th className="pb-4">Details</th>
+                        <th className="pb-4">Status</th>
+                        <th className="pb-4 pr-4 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/20">
+                      {history.length === 0 ? (
+                        <tr><td colSpan="5" className={`py-8 text-center ${theme.textMuted}`}>No transaction history yet.</td></tr>
+                      ) : history.map((item) => (
+                        <tr key={item.id} className="hover:bg-slate-500/5">
+                          <td className="py-4 pl-4">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${item.type === 'Reservation' ? 'bg-[#75BDE0]/10 text-[#75BDE0]' : 'bg-[#F8BC9B]/10 text-[#F8BC9B]'}`}>
+                              {item.type}
+                            </span>
+                          </td>
+                          <td className={`py-4 ${theme.text}`}>{item.guestName}</td>
+                          <td className={`py-4 ${theme.textMuted}`}>{item.tableName} • {item.date}</td>
+                          <td className="py-4">
+                            <span className={`text-xs font-bold ${
+                              item.status === 'Completed' ? 'text-emerald-400' : 
+                              item.status === 'Canceled' ? 'text-red-400' : 'text-[#75BDE0]'
+                            }`}>
+                              {item.status}
+                            </span>
+                          </td>
+                          <td className={`py-4 pr-4 text-right font-bold ${theme.text}`}>₱{item.amount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MANAGEMENT VIEW */}
+          {currentView === 'management' && (
+            <div className={`max-w-4xl mx-auto rounded-3xl p-8 border ${theme.card}`}>
+              <div className="flex items-center justify-between mb-8">
+                <h3 className={`text-2xl font-bold ${theme.text}`}>Table Management</h3>
+                <button onClick={() => setCurrentView('dashboard')} className="text-[#75BDE0] hover:underline">Back to Dashboard</button>
+              </div>
+              
+              <div className={`p-6 rounded-2xl border mb-8 ${theme.subCard}`}>
+                <label className={`block text-sm font-bold mb-3 ${theme.textMuted}`}>Add New Table</label>
+                <div className="flex gap-4">
+                  <input 
+                    type="text" 
+                    value={newTableName}
+                    onChange={(e) => setNewTableName(e.target.value)}
+                    placeholder="Enter table name"
+                    className={`flex-1 rounded-xl px-4 focus:border-[#75BDE0] outline-none ${theme.input}`}
+                  />
+                  <button onClick={handleAddTable} className="bg-[#75BDE0] hover:bg-[#64a9cc] text-[#0f172a] font-bold px-6 rounded-xl transition-colors">Add</button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {tables.map(table => (
+                  <div key={table.id} className={`flex items-center justify-between p-4 rounded-xl border ${theme.subCard}`}>
+                    <span className={`font-bold ${theme.text}`}>{table.name}</span>
+                    <div className="flex gap-2">
+                      <button onClick={() => openEditModal(table)} className="p-2 text-[#75BDE0] hover:bg-[#75BDE0]/10 rounded-lg"><Edit2 className="w-4 h-4" /></button>
+                      <button onClick={() => handleDeleteTable(table.id)} className="p-2 text-[#F89B9B] hover:bg-[#F89B9B]/10 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* SETTINGS VIEW */}
+          {currentView === 'settings' && (
+            <div className={`max-w-4xl mx-auto rounded-3xl p-8 border ${theme.card}`}>
+              <div className="flex items-center justify-between mb-8">
+                <h3 className={`text-2xl font-bold ${theme.text}`}>System Settings</h3>
+                <button onClick={() => setCurrentView('dashboard')} className="text-[#75BDE0] hover:underline">Back to Dashboard</button>
+              </div>
+
+              <div className="space-y-6">
+                <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
+                  <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
+                    <Monitor className="w-5 h-5 text-[#F8BC9B]" /> Appearance
+                  </h4>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className={`font-bold ${theme.text}`}>Theme Preference</p>
+                      <p className={`text-sm ${theme.textMuted}`}>Switch between light and dark mode</p>
+                    </div>
                     <button 
-                      onClick={handleAddTable}
-                      disabled={!newTableName.trim()}
-                      className={`px-8 py-4 rounded-2xl font-bold text-white transition-all shadow-md ${
-                        newTableName.trim() 
-                          ? 'bg-[#75BDE0] hover:bg-[#64a9cc] hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0' 
-                          : 'bg-slate-300 cursor-not-allowed shadow-none'
-                      }`}
+                      onClick={() => setDarkMode(!darkMode)}
+                      className={`relative w-16 h-8 rounded-full transition-colors duration-300 ${darkMode ? 'bg-[#75BDE0]' : 'bg-slate-300'}`}
                     >
-                      Add Table
+                      <div className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white shadow-md transform transition-transform duration-300 flex items-center justify-center ${darkMode ? 'translate-x-8' : 'translate-x-0'}`}>
+                        {darkMode ? <Moon className="w-3 h-3 text-[#75BDE0]" /> : <Sun className="w-3 h-3 text-orange-400" />}
+                      </div>
                     </button>
                   </div>
                 </div>
 
-                {/* Existing Tables List */}
-                <div className="space-y-4">
-                  <p className="text-xl font-bold text-slate-700 pl-2">Existing Tables</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {tables.map(table => (
-                      <div key={table.id} className="group flex items-center justify-between p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md hover:border-[#F8D49B]/50 transition-all">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center">
-                            <span className="font-bold text-[#F8BC9B]">#{table.id}</span>
-                          </div>
-                          <span className="font-bold text-lg text-slate-700">{table.name}</span>
+                <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
+                  <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
+                    <History className="w-5 h-5 text-[#F89B9B]" /> History Log
+                  </h4>
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                    {history.length === 0 ? (
+                      <p className={`text-sm ${theme.textMuted}`}>No history available.</p>
+                    ) : history.map((h) => (
+                      <div key={h.id} className={`flex justify-between items-center p-3 rounded-xl border ${darkMode ? 'border-[#334155] bg-[#1e293b]/50' : 'border-slate-200 bg-white'}`}>
+                        <div>
+                          <p className={`text-sm font-bold ${theme.text}`}>{h.type}: {h.tableName}</p>
+                          <p className={`text-xs ${theme.textMuted}`}>{h.date} - {h.status}</p>
                         </div>
-                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => openEditModal(table)}
-                            className="p-2.5 text-[#75BDE0] bg-[#75BDE0]/10 hover:bg-[#75BDE0]/20 rounded-xl transition-colors"
-                            title="Edit Name"
-                          >
-                            <Edit2 className="w-5 h-5" />
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteTable(table.id)}
-                            className="p-2.5 text-[#F89B9B] bg-[#F89B9B]/10 hover:bg-[#F89B9B]/20 rounded-xl transition-colors"
-                            title="Delete Table"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </div>
+                        <span className={`text-sm font-bold ${h.status === 'Completed' ? 'text-emerald-500' : 'text-red-400'}`}>
+                          {h.status === 'Completed' ? `+₱${h.amount}` : h.status}
+                        </span>
                       </div>
                     ))}
                   </div>
                 </div>
-
-                {/* Info Note */}
-                <div className="bg-[#F8D49B]/10 rounded-2xl p-5 border border-[#F8D49B]/30 flex items-start gap-4">
-                  <div className="p-2 bg-white rounded-full flex-shrink-0 shadow-sm">
-                    <Info className="w-6 h-6 text-[#F8BC9B]" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-slate-700 mb-1">Important Note</p>
-                    <p className="text-slate-500 leading-relaxed">
-                      Tables with active or upcoming reservations cannot be removed. You must cancel all reservations first. Renaming a table will automatically update all associated reservations.
-                    </p>
-                  </div>
-                </div>
-
               </div>
-           </div>
-        </div>
-      )}
-
-      {/* Shared Modal (Reserve / Walk-in / Edit) */}
-      {showModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-300 border border-white/50">
-            
-            {/* Modal Header with Gradient */}
-            <div className={`p-6 pb-8 relative overflow-hidden bg-gradient-to-br from-[#75BDE0] to-[#F89B9B]`}>
-              
-              {/* Background Decoration */}
-              <div className="absolute top-0 right-0 -mt-4 -mr-4 text-white/10 pointer-events-none">
-                {modalType === 'reserve' && <Calendar className="w-32 h-32" />}
-                {(modalType === 'walkin' || modalType === 'edit') && <Edit2 className="w-32 h-32" />}
-              </div>
-
-              <div className="flex justify-between items-center relative z-10">
-                <h3 className="text-2xl font-extrabold text-white drop-shadow-sm">
-                  {modalType === 'reserve' && 'New Reservation'}
-                  {modalType === 'walkin' && 'Walk-In Session'}
-                  {modalType === 'edit' && 'Edit Table Name'}
-                </h3>
-                <button onClick={closeModal} className="p-2 bg-white/20 hover:bg-white/30 rounded-full text-white transition-colors backdrop-blur-sm">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              <p className="text-white/80 mt-2 font-medium relative z-10">
-                {modalType === 'edit' ? 'Update the name of this table.' : `Enter details for ${selectedTable?.name}.`}
-              </p>
             </div>
+          )}
 
-            <div className="p-8 space-y-6">
+        </div>
+      </main>
 
-              {/* --- Dynamic Inputs based on Type --- */}
-              
-              {/* 1. Name Input (All types) */}
+      {/* --- MODAL --- */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
+            <div className={`p-6 ${modalType === 'walkin' ? 'bg-[#F8BC9B]' : 'bg-[#75BDE0]'} text-[#0f172a]`}>
+              <div className="flex justify-between items-center mb-1">
+                <h3 className="text-2xl font-black">
+                  {modalType === 'walkin' ? 'Walk-In Session' : modalType === 'reserve' ? 'New Reservation' : 'Edit Table'}
+                </h3>
+                <button onClick={closeModal} className="p-1 bg-black/10 rounded-full hover:bg-black/20"><X className="w-5 h-5"/></button>
+              </div>
+              <p className="font-medium opacity-80">{selectedTable?.name}</p>
+            </div>
+            
+            <div className="p-6 space-y-5">
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2 pl-1">
-                  {modalType === 'edit' ? 'New Table Name' : (modalType === 'walkin' ? 'Guest Name (Optional)' : 'Guest Name')}
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                  {modalType === 'edit' ? 'New Name' : 'Guest Name'}
                 </label>
-                <input
-                  type="text"
+                <input 
                   autoFocus
+                  type="text" 
                   value={formData.guestName}
                   onChange={(e) => setFormData({...formData, guestName: e.target.value})}
-                  placeholder={modalType === 'edit' ? "Enter new name" : "Enter guest name"}
-                  className="w-full px-5 py-4 rounded-2xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-[#75BDE0] focus:ring-4 focus:ring-[#75BDE0]/20 outline-none transition-all text-lg font-medium text-slate-700"
+                  className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-[#0f172a] focus:border-[#75BDE0] outline-none"
                 />
               </div>
 
-              {/* 2. Reservation Specifics: Date & Time */}
               {modalType === 'reserve' && (
-                <div className="grid grid-cols-2 gap-5">
+                <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2 pl-1">Date</label>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Date</label>
                     <input 
-                      type="date"
-                      min={new Date().toISOString().split('T')[0]}
+                      type="date" 
                       value={formData.date}
                       onChange={(e) => setFormData({...formData, date: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-[#75BDE0] focus:ring-4 focus:ring-[#75BDE0]/20 outline-none transition-all font-medium text-slate-700"
+                      className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-[#0f172a] focus:border-[#75BDE0] outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2 pl-1">Time</label>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Time</label>
                     <input 
-                      type="time"
-                      min="07:00"
-                      max="23:59"
+                      type="time" 
                       value={formData.time}
                       onChange={(e) => setFormData({...formData, time: e.target.value})}
-                      className="w-full px-5 py-4 rounded-2xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-[#75BDE0] focus:ring-4 focus:ring-[#75BDE0]/20 outline-none transition-all font-medium text-slate-700"
+                      className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-[#0f172a] focus:border-[#75BDE0] outline-none"
                     />
-                    <p className="text-xs font-bold text-slate-400 mt-2 pl-1 flex items-center gap-1">
-                      <Clock className="w-3 h-3" /> 7:00 AM - 11:59 PM
-                    </p>
+                  </div>
+                  <div className="col-span-2 p-3 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold flex justify-between">
+                    <span>Reservation Fee:</span>
+                    <span>₱{RESERVATION_FEE}</span>
                   </div>
                 </div>
               )}
 
-              {/* 3. Walk-In Specifics: Duration & Open Time */}
               {modalType === 'walkin' && (
-                <div className="space-y-5">
-                  <div className={`transition-all duration-300 ${formData.isOpenTime ? 'opacity-40 grayscale pointer-events-none scale-95' : 'scale-100'}`}>
-                    <label className="block text-sm font-bold text-slate-700 mb-2 pl-1">
-                      Hours Playing
-                    </label>
-                    <div className="relative">
-                      <input 
-                        type="number"
-                        min="1"
-                        max="12"
-                        value={formData.duration}
-                        onChange={(e) => setFormData({...formData, duration: e.target.value})}
-                        className="w-full pl-5 pr-16 py-4 rounded-2xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-[#75BDE0] focus:ring-4 focus:ring-[#75BDE0]/20 outline-none transition-all text-lg font-medium text-slate-700"
-                      />
-                      <span className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 font-bold bg-slate-100 px-2 py-1 rounded-lg">Hrs</span>
-                    </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Duration</label>
+                  <div className={`relative transition-all ${formData.isOpenTime ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <input 
+                      type="number" 
+                      value={formData.duration}
+                      onChange={(e) => setFormData({...formData, duration: e.target.value})}
+                      className="w-full p-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-[#0f172a] focus:border-[#F8BC9B] outline-none pl-4 pr-20"
+                    />
+                    <span className="absolute right-10 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400 pointer-events-none">Hrs</span>
                   </div>
                   
-                  {/* Open Time Toggle Button */}
-                  <button
-                    type="button"
+                  <button 
                     onClick={handleOpenTimeToggle}
-                    className={`w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 border-2 transition-all font-bold text-lg shadow-sm ${
+                    className={`mt-3 w-full py-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold transition-all ${
                       formData.isOpenTime 
-                        ? 'bg-[#75BDE0] text-white border-transparent shadow-lg shadow-[#75BDE0]/30 scale-[1.02]' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:border-[#F8BC9B] hover:bg-[#F8BC9B]/5'
+                        ? 'border-[#F8BC9B] bg-[#F8BC9B]/10 text-[#F8BC9B]' 
+                        : 'border-slate-100 text-slate-400 hover:border-[#F8BC9B]'
                     }`}
                   >
-                    {formData.isOpenTime ? (
-                      <><Infinity className="w-6 h-6" /> Open Time Selected</>
-                    ) : (
-                      <><Infinity className="w-6 h-6 text-slate-400" /> Switch to Open Time</>
-                    )}
+                    <Infinity className="w-5 h-5" />
+                    {formData.isOpenTime ? 'Open Time Active' : 'Switch to Open Time'}
                   </button>
 
-                  {/* Warning if constrained by reservation */}
-                  {renderOpenTimeWarning()}
-
-                </div>
-              )}
-
-              {/* Error Message */}
-              {error && (
-                <div className="bg-red-50 border-2 border-red-100 text-red-700 p-4 rounded-2xl flex items-start gap-3 animate-in fade-in zoom-in-95 shadow-sm">
-                  <div className="p-1 bg-red-100 rounded-full flex-shrink-0">
-                    <AlertCircle className="w-5 h-5 text-red-600" />
+                  <div className="mt-4 p-3 bg-orange-50 text-orange-600 rounded-xl text-xs font-bold flex justify-between items-center">
+                    <div>
+                      <span>Hourly Rate:</span>
+                      <span className="ml-2">₱{HOURLY_RATE}/hr</span>
+                    </div>
+                    {startingReservationId && (
+                      <span className="text-green-600 bg-green-100 px-2 py-1 rounded">
+                        -₱{RESERVATION_FEE} (Rsrv)
+                      </span>
+                    )}
                   </div>
-                  <p className="font-medium mt-0.5">{error}</p>
+                  
+                  {modalType === 'walkin' && formData.isOpenTime && (() => {
+                     const nextRes = getNextTodayReservation(selectedTable);
+                     if(nextRes) return (
+                       <div className="mt-3 p-3 bg-[#F8D49B]/20 border border-[#F8D49B] rounded-xl text-xs text-[#0f172a]">
+                         <span className="font-bold">Note:</span> Table reserved at {convertTo12Hour(nextRes.rawTime)}.
+                       </div>
+                     );
+                  })()}
                 </div>
               )}
 
-            </div>
+              {error && (
+                <div className="p-3 bg-red-50 text-red-500 rounded-xl text-sm font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4"/> {error}
+                </div>
+              )}
 
-            {/* Modal Footer with Actions */}
-            <div className="p-8 pt-0 flex gap-4">
-              <button
-                onClick={closeModal}
-                className="flex-1 py-4 text-slate-700 bg-slate-100 hover:bg-slate-200 font-bold rounded-2xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirm}
-                className={`flex-1 py-4 text-white font-bold rounded-2xl shadow-md transition-all hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 ${
-                    modalType === 'walkin' || modalType === 'edit'
-                      ? 'bg-[#75BDE0] hover:bg-[#64a9cc]'
-                      : 'bg-[#F89B9B] hover:bg-[#e88b8b]'
-                }`}
-              >
-                Confirm
-              </button>
+              <div className="flex gap-3 pt-2">
+                <button onClick={closeModal} className="flex-1 py-3 rounded-xl font-bold text-slate-400 hover:bg-slate-50 transition-colors">Cancel</button>
+                <button 
+                  onClick={handleConfirm}
+                  className={`flex-1 py-3 rounded-xl font-bold text-white shadow-lg transition-transform active:scale-95 ${
+                    modalType === 'walkin' ? 'bg-[#F8BC9B] hover:bg-[#e6ab8c]' : 'bg-[#75BDE0] hover:bg-[#64a9cc]'
+                  }`}
+                >
+                  Confirm
+                </button>
+              </div>
             </div>
           </div>
         </div>
