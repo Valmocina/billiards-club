@@ -4,7 +4,8 @@ import {
   ArrowLeft, Info, AlertCircle, Infinity, User, 
   LayoutDashboard, Armchair, Settings, LogOut, 
   Search, Bell, Moon, Sun, Monitor, DollarSign,
-  CheckCircle, History, TrendingUp, Receipt, Play
+  CheckCircle, History, TrendingUp, Receipt, Play,
+  Lock, Key
 } from 'lucide-react';
 
 const App = () => {
@@ -12,7 +13,13 @@ const App = () => {
   const HOURLY_RATE = 200;
   const RESERVATION_FEE = 50;
 
-  // --- STATE ---
+  // --- AUTH STATE ---
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminCredentials, setAdminCredentials] = useState({ username: 'admin', password: 'admin' });
+  const [loginInput, setLoginInput] = useState({ username: '', password: '' });
+  const [loginError, setLoginError] = useState('');
+
+  // --- APP STATE ---
   const [tables, setTables] = useState([
     { id: 1, name: 'Table 1', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
     { id: 2, name: 'Table 2', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
@@ -26,7 +33,7 @@ const App = () => {
   const [history, setHistory] = useState([]); 
   const [currentView, setCurrentView] = useState('dashboard'); 
   const [darkMode, setDarkMode] = useState(true);
-  const [startingReservationId, setStartingReservationId] = useState(null); // Track if we are starting a specific reservation
+  const [startingReservationId, setStartingReservationId] = useState(null); 
   
   // Modal & Form State
   const [showModal, setShowModal] = useState(false);
@@ -42,7 +49,46 @@ const App = () => {
   const [error, setError] = useState('');
   const [newTableName, setNewTableName] = useState('');
 
+  // Settings State
+  const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' });
+  const [passwordMsg, setPasswordMsg] = useState({ text: '', type: '' });
+
   // --- ACTIONS ---
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (loginInput.username === adminCredentials.username && loginInput.password === adminCredentials.password) {
+      setIsAuthenticated(true);
+      setLoginError('');
+    } else {
+      setLoginError('Invalid username or password');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setLoginInput({ username: '', password: '' });
+    setCurrentView('dashboard');
+  };
+
+  const handleChangePassword = () => {
+    if (passwordForm.current !== adminCredentials.password) {
+      setPasswordMsg({ text: 'Current password is incorrect.', type: 'error' });
+      return;
+    }
+    if (passwordForm.new.length < 4) {
+      setPasswordMsg({ text: 'New password must be at least 4 characters.', type: 'error' });
+      return;
+    }
+    if (passwordForm.new !== passwordForm.confirm) {
+      setPasswordMsg({ text: 'New passwords do not match.', type: 'error' });
+      return;
+    }
+    
+    setAdminCredentials({ ...adminCredentials, password: passwordForm.new });
+    setPasswordMsg({ text: 'Password updated successfully!', type: 'success' });
+    setPasswordForm({ current: '', new: '', confirm: '' });
+  };
+
   const resetForm = () => {
     setFormData({
       guestName: '',
@@ -83,7 +129,6 @@ const App = () => {
     setShowModal(true);
   };
 
-  // *** NEW: Start a reservation ***
   const handleStartReservation = (res) => {
     const table = tables.find(t => t.name === res.tableName);
     if (!table) return;
@@ -102,14 +147,12 @@ const App = () => {
       duration: 1,
       isOpenTime: false
     });
-    setStartingReservationId(res.id); // Mark this walk-in as coming from a reservation
+    setStartingReservationId(res.id); 
     setShowModal(true);
   };
 
   const handleFinishSession = (table) => {
     let cost = 0;
-    
-    // Calculate final cost
     if (table.sessionType === 'walkin') {
        if (table.isOpenTime) {
           cost = HOURLY_RATE; 
@@ -118,7 +161,6 @@ const App = () => {
        }
     }
 
-    // *** DEDUCT RESERVATION FEE ***
     if (table.deductible) {
       cost = Math.max(0, cost - table.deductible);
     }
@@ -133,7 +175,7 @@ const App = () => {
         sessionType: null, 
         duration: null, 
         isOpenTime: false,
-        deductible: 0 // Reset deductible
+        deductible: 0
       } : t
     ));
     
@@ -244,7 +286,6 @@ const App = () => {
   const handleConfirm = () => {
     setError('');
     
-    // --- EDIT NAME ---
     if (modalType === 'edit') {
       if (!formData.guestName.trim()) return;
       setTables(tables.map(t => t.id === selectedTable.id ? { ...t, name: formData.guestName } : t));
@@ -252,13 +293,11 @@ const App = () => {
       return;
     }
 
-    // --- SHARED NAME VALIDATION ---
     if (modalType === 'reserve' && !formData.guestName.trim()) {
       setError('Please enter a name');
       return;
     }
     
-    // --- WALK-IN LOGIC ---
     if (modalType === 'walkin') {
       const conflictMsg = checkWalkInConflict(selectedTable, Number(formData.duration), formData.isOpenTime);
       if (conflictMsg) { setError(conflictMsg); return; }
@@ -276,10 +315,7 @@ const App = () => {
         occupiedUntilRaw = endTime;
       }
 
-      // Determine Deduction
       const deductionAmount = startingReservationId ? RESERVATION_FEE : 0;
-
-      // Calculate approximate cost for history tracking later
       const estimatedCost = formData.isOpenTime ? 0 : (Number(formData.duration) * HOURLY_RATE);
 
       setTables(tables.map(t => t.id === selectedTable.id ? { 
@@ -292,10 +328,9 @@ const App = () => {
         duration: Number(formData.duration),
         isOpenTime: formData.isOpenTime,
         currentGuest: formData.guestName,
-        deductible: deductionAmount // Store the 50 fee to deduct later
+        deductible: deductionAmount 
       } : t));
       
-      // If we started a reservation, remove it from the reservation list
       if (startingReservationId) {
         setReservations(reservations.filter(r => r.id !== startingReservationId));
       }
@@ -303,7 +338,6 @@ const App = () => {
       closeModal();
 
     } 
-    // --- RESERVATION LOGIC ---
     else if (modalType === 'reserve') {
       if (!formData.date || !formData.time) { setError('Select date and time'); return; }
       const [h] = formData.time.split(':').map(Number);
@@ -360,12 +394,10 @@ const App = () => {
     setStartingReservationId(null);
   };
 
-  // --- DERIVED STATS ---
   const totalEarnings = useMemo(() => {
     return history.reduce((sum, item) => item.status !== 'Canceled' ? sum + item.amount : sum, 0);
   }, [history]);
 
-  // --- THEME CLASSES ---
   const theme = {
     bg: darkMode ? 'bg-[#0f172a]' : 'bg-[#f8fafc]',
     text: darkMode ? 'text-[#f1f5f9]' : 'text-[#0f172a]',
@@ -378,6 +410,57 @@ const App = () => {
     tableHeader: darkMode ? 'bg-[#0f172a] text-[#94a3b8]' : 'bg-slate-50 text-slate-500'
   };
 
+  // --- LOGIN SCREEN ---
+  if (!isAuthenticated) {
+    return (
+      <div className={`h-screen w-full flex items-center justify-center ${theme.bg} ${theme.text}`}>
+        <div className={`w-full max-w-md p-8 rounded-3xl shadow-2xl border ${theme.card} animate-in fade-in zoom-in-95`}>
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#75BDE0] to-[#F8BC9B] flex items-center justify-center text-[#0f172a] font-bold text-3xl shadow-lg mx-auto mb-4">8B</div>
+            <h1 className="text-2xl font-bold">Admin Login</h1>
+            <p className={theme.textMuted}>Enter your credentials to continue</p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className={`block text-sm font-bold mb-2 ${theme.textMuted}`}>Username</label>
+              <div className={`flex items-center px-4 py-3 rounded-xl border ${theme.subCard}`}>
+                <User className="w-5 h-5 text-[#75BDE0] mr-3" />
+                <input 
+                  type="text" 
+                  value={loginInput.username}
+                  onChange={(e) => setLoginInput({...loginInput, username: e.target.value})}
+                  className="bg-transparent border-none outline-none flex-1 text-sm font-medium"
+                  placeholder="Enter username"
+                />
+              </div>
+            </div>
+            <div>
+              <label className={`block text-sm font-bold mb-2 ${theme.textMuted}`}>Password</label>
+              <div className={`flex items-center px-4 py-3 rounded-xl border ${theme.subCard}`}>
+                <Lock className="w-5 h-5 text-[#F8BC9B] mr-3" />
+                <input 
+                  type="password" 
+                  value={loginInput.password}
+                  onChange={(e) => setLoginInput({...loginInput, password: e.target.value})}
+                  className="bg-transparent border-none outline-none flex-1 text-sm font-medium"
+                  placeholder="Enter password"
+                />
+              </div>
+            </div>
+            
+            {loginError && <p className="text-red-400 text-sm text-center font-bold">{loginError}</p>}
+            
+            <button type="submit" className="w-full py-4 bg-gradient-to-r from-[#75BDE0] to-[#F89B9B] rounded-xl text-[#0f172a] font-bold shadow-lg hover:shadow-xl hover:opacity-90 transition-all mt-4">
+              Sign In
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // --- MAIN APP ---
   return (
     <div className={`flex h-screen font-sans overflow-hidden transition-colors duration-300 ${theme.bg} ${theme.text}`}>
       
@@ -435,7 +518,10 @@ const App = () => {
         </nav>
 
         <div className={`p-4 border-t ${darkMode ? 'border-[#334155]' : 'border-slate-200'}`}>
-          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#F89B9B] hover:bg-[#F89B9B]/10 transition-all font-medium">
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#F89B9B] hover:bg-[#F89B9B]/10 transition-all font-medium"
+          >
             <LogOut className="w-5 h-5" /> Logout
           </button>
         </div>
@@ -459,7 +545,6 @@ const App = () => {
                 className={`${theme.input} text-sm rounded-full pl-10 pr-4 py-2 focus:outline-none focus:border-[#75BDE0] w-64 transition-colors`}
               />
             </div>
-            {/* Removed Icons as requested */}
           </div>
         </header>
 
@@ -510,7 +595,6 @@ const App = () => {
                       </div>
 
                       <div className="flex gap-3 pt-2">
-                        {/* Buttons Logic Updated */}
                         {table.status === 'Available' ? (
                           <>
                             <button onClick={() => handleReserveClick(table)} className="flex-1 py-2.5 rounded-lg bg-[#75BDE0] hover:bg-[#64a9cc] text-white text-sm font-bold shadow-md shadow-[#75BDE0]/20 transition-all active:scale-95">Reserve</button>
@@ -718,6 +802,48 @@ const App = () => {
               </div>
 
               <div className="space-y-6">
+                {/* Account Management */}
+                <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
+                  <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
+                    <Key className="w-5 h-5 text-[#F8BC9B]" /> Change Password
+                  </h4>
+                  <div className="space-y-4 max-w-md">
+                    <input 
+                      type="password"
+                      placeholder="Current Password" 
+                      value={passwordForm.current}
+                      onChange={(e) => setPasswordForm({...passwordForm, current: e.target.value})}
+                      className={`w-full p-3 rounded-xl border outline-none ${theme.input}`}
+                    />
+                    <input 
+                      type="password"
+                      placeholder="New Password" 
+                      value={passwordForm.new}
+                      onChange={(e) => setPasswordForm({...passwordForm, new: e.target.value})}
+                      className={`w-full p-3 rounded-xl border outline-none ${theme.input}`}
+                    />
+                    <input 
+                      type="password"
+                      placeholder="Confirm New Password" 
+                      value={passwordForm.confirm}
+                      onChange={(e) => setPasswordForm({...passwordForm, confirm: e.target.value})}
+                      className={`w-full p-3 rounded-xl border outline-none ${theme.input}`}
+                    />
+                    {passwordMsg.text && (
+                      <p className={`text-sm font-bold ${passwordMsg.type === 'error' ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {passwordMsg.text}
+                      </p>
+                    )}
+                    <button 
+                      onClick={handleChangePassword}
+                      className="px-6 py-2 bg-[#75BDE0] text-[#0f172a] font-bold rounded-xl shadow-lg hover:opacity-90 transition-all"
+                    >
+                      Update Password
+                    </button>
+                  </div>
+                </div>
+
+                {/* Appearance */}
                 <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
                   <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
                     <Monitor className="w-5 h-5 text-[#F8BC9B]" /> Appearance
@@ -738,6 +864,7 @@ const App = () => {
                   </div>
                 </div>
 
+                {/* History Log */}
                 <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
                   <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
                     <History className="w-5 h-5 text-[#F89B9B]" /> History Log
