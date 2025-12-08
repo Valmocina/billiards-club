@@ -444,7 +444,7 @@ const App = () => {
         <div className="p-6 flex items-center gap-4">
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#75BDE0] to-[#F8BC9B] flex items-center justify-center text-[#0f172a] font-bold text-sm shadow-lg shrink-0">B&C</div>
           <div>
-            <h1 className={`text-lg font-bold leading-tight ${theme.text}`}>Club Manager</h1>
+            <h1 className={`text-lg font-bold leading-tight ${theme.text}`}>Manager</h1>
           </div>
         </div>
 
@@ -549,9 +549,6 @@ const App = () => {
               <div className="xl:col-span-2 space-y-6">
                 {/* Dashboard Title Header */}
                 <div className="text-center mb-8 xl:text-left xl:mb-0">
-                  <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-[#75BDE0] to-[#F89B9B] mb-2 drop-shadow-sm">
-                    B&C Billiards
-                  </h1>
                   <p className={`${theme.textMuted} text-lg`}>Reserve your table for the perfect game</p>
                 </div>
 
