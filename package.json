@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://smval.github.io/billiards-club",
+  "homepage": "https://github.com/Valmocina/billiards-club.git",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
