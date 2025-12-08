@@ -4,7 +4,8 @@ import {
   ArrowLeft, Info, AlertCircle, Infinity, User, 
   LayoutDashboard, Armchair, Settings, LogOut, 
   Search, Bell, Moon, Sun, Monitor, DollarSign,
-  CheckCircle, History, Key, LogIn
+  CheckCircle, History, TrendingUp, Receipt, Play,
+  Lock, Key, LogIn // <--- These are critical for the login page
 } from 'lucide-react';
 
 const App = () => {
