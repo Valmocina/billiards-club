@@ -1,11 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { supabase } from './supabase'; // <--- IMPORT SUPABASE CLIENT
 import { 
   Clock, Calendar, X, Trash2, Edit2, Plus, 
   ArrowLeft, Info, AlertCircle, Infinity, User, 
   LayoutDashboard, Armchair, Settings, LogOut, 
   Search, Bell, Moon, Sun, Monitor, DollarSign,
   CheckCircle, History, TrendingUp, Receipt, Play,
-  Lock, Key, LogIn // <--- These are critical for the login page
+  Lock, Key, LogIn 
 } from 'lucide-react';
 
 const App = () => {
@@ -19,18 +20,11 @@ const App = () => {
   const [loginInput, setLoginInput] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
-  // --- APP STATE ---
-  const [tables, setTables] = useState([
-    { id: 1, name: 'Table 1', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
-    { id: 2, name: 'Table 2', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
-    { id: 3, name: 'Table 3', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
-    { id: 4, name: 'Table 4', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
-    { id: 5, name: 'Table 5', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
-    { id: 6, name: 'Table 6', status: 'Available', occupiedUntil: null, occupiedUntilRaw: null, currentSessionStart: null, sessionType: null },
-  ]);
-
+  // --- APP STATE (Now starts empty, fills from Supabase) ---
+  const [tables, setTables] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [history, setHistory] = useState([]); 
+  
   const [currentView, setCurrentView] = useState('dashboard'); 
   const [darkMode, setDarkMode] = useState(true);
   const [startingReservationId, setStartingReservationId] = useState(null); 
@@ -52,6 +46,60 @@ const App = () => {
   // Settings State
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [passwordMsg, setPasswordMsg] = useState({ text: '', type: '' });
+
+  // --- SUPABASE FETCHING ---
+  const fetchAllData = async () => {
+    // 1. Fetch Tables
+    const { data: tablesData } = await supabase.from('tables').select('*').order('id', { ascending: true });
+    if (tablesData) {
+      // Convert ISO strings back to Date objects for logic to work
+      const formattedTables = tablesData.map(t => ({
+        ...t,
+        occupiedUntilRaw: t.occupied_until_raw ? new Date(t.occupied_until_raw) : null,
+        occupiedUntil: t.occupied_until,
+        sessionType: t.session_type,
+        currentGuest: t.current_guest,
+        isOpenTime: t.is_open_time
+      }));
+      setTables(formattedTables);
+    }
+
+    // 2. Fetch Reservations
+    const { data: resData } = await supabase.from('reservations').select('*').order('id', { ascending: false });
+    if (resData) {
+        // Map Supabase columns to your camelCase state
+        const formattedRes = resData.map(r => ({
+            ...r,
+            tableName: r.table_name,
+            guestName: r.guest_name,
+            rawDate: r.raw_date,
+            rawTime: r.raw_time,
+            displayDate: r.display_date,
+            displayTime: r.display_time
+        }));
+        setReservations(formattedRes);
+    }
+
+    // 3. Fetch History
+    const { data: histData } = await supabase.from('history').select('*').order('id', { ascending: false });
+    if (histData) {
+        const formattedHist = histData.map(h => ({
+            ...h,
+            tableName: h.table_name,
+            guestName: h.guest_name,
+        }));
+        setHistory(formattedHist);
+    }
+  };
+
+  // Load data on startup
+  useEffect(() => {
+    fetchAllData();
+    
+    // Optional: Auto-refresh every 5 seconds to see updates from other computers
+    const interval = setInterval(fetchAllData, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // --- ACTIONS ---
   const handleLogin = (e) => {
@@ -102,18 +150,20 @@ const App = () => {
     setStartingReservationId(null);
   };
 
-  const addToHistory = (item, status, amount = 0) => {
+  // Modified to save to Supabase
+  const addToHistory = async (item, status, amount = 0) => {
     const newEntry = {
-      id: Date.now(),
-      tableName: item.tableName || item.name,
-      guestName: item.guestName || 'Walk-In',
+      table_name: item.tableName || item.name,
+      guest_name: item.guestName || item.currentGuest || 'Walk-In',
       date: new Date().toLocaleDateString(),
       time: new Date().toLocaleTimeString(),
       type: item.type || 'Session',
       status: status, 
       amount: amount
     };
-    setHistory(prev => [newEntry, ...prev]);
+    
+    await supabase.from('history').insert([newEntry]);
+    fetchAllData(); // Refresh local state
   };
 
   const handleWalkInClick = (table) => {
@@ -152,11 +202,12 @@ const App = () => {
     setShowModal(true);
   };
 
-  const handleFinishSession = (table) => {
+  // Modified to update Supabase
+  const handleFinishSession = async (table) => {
     let cost = 0;
     if (table.sessionType === 'walkin') {
        if (table.isOpenTime) {
-          cost = HOURLY_RATE; 
+          cost = HOURLY_RATE; // Simplified logic, usually calculated by time diff
        } else {
           cost = (table.duration || 1) * HOURLY_RATE;
        }
@@ -166,50 +217,47 @@ const App = () => {
       cost = Math.max(0, cost - table.deductible);
     }
     
-    setTables(tables.map(t => 
-      t.id === table.id ? { 
-        ...t, 
-        status: 'Available', 
-        occupiedUntil: null, 
-        occupiedUntilRaw: null, 
-        currentSessionStart: null, 
-        sessionType: null, 
-        duration: null, 
-        isOpenTime: false,
+    // Update Supabase: Reset table
+    await supabase.from('tables').update({
+        status: 'Available',
+        occupied_until: null,
+        occupied_until_raw: null,
+        session_type: null,
+        current_guest: null,
+        duration: null,
+        is_open_time: false,
         deductible: 0
-      } : t
-    ));
-    
-    addToHistory({ tableName: table.name, type: 'Walk-In', guestName: table.currentGuest }, 'Completed', cost);
+    }).eq('id', table.id);
+
+    // Add to history
+    await addToHistory({ tableName: table.name, type: 'Walk-In', guestName: table.currentGuest }, 'Completed', cost);
+    fetchAllData(); // Refresh UI
   };
 
-  const resetTable = (id) => {
-    const table = tables.find(t => t.id === id);
-    if(table) handleFinishSession(table);
-  };
-
-  const handleCancelReservation = (id) => {
+  const handleCancelReservation = async (id) => {
     const res = reservations.find(r => r.id === id);
     if (res) {
-      addToHistory({ ...res, type: 'Reservation' }, 'Canceled', 0);
-      setReservations(reservations.filter(r => r.id !== id));
+      await addToHistory({ ...res, type: 'Reservation' }, 'Canceled', 0);
+      await supabase.from('reservations').delete().eq('id', id);
+      fetchAllData();
     }
   };
 
-  const handleAddTable = () => {
+  const handleAddTable = async () => {
     if (!newTableName.trim()) return;
-    const newId = tables.length > 0 ? Math.max(...tables.map(t => t.id)) + 1 : 1;
-    setTables([...tables, { id: newId, name: newTableName, status: 'Available', occupiedUntil: null }]);
+    await supabase.from('tables').insert([{ name: newTableName, status: 'Available' }]);
     setNewTableName('');
+    fetchAllData();
   };
 
-  const handleDeleteTable = (id) => {
+  const handleDeleteTable = async (id) => {
     const tableToDelete = tables.find(t => t.id === id);
     if (tableToDelete.status === 'Occupied') {
       alert("Cannot delete occupied table.");
       return;
     }
-    setTables(tables.filter(t => t.id !== id));
+    await supabase.from('tables').delete().eq('id', id);
+    fetchAllData();
   };
 
   const openEditModal = (table) => {
@@ -284,13 +332,16 @@ const App = () => {
     return `${h}:${minutes} ${ampm}`;
   };
 
-  const handleConfirm = () => {
+  // --- CORE LOGIC MODIFIED FOR SUPABASE ---
+  const handleConfirm = async () => {
     setError('');
     
+    // EDIT TABLE NAME
     if (modalType === 'edit') {
       if (!formData.guestName.trim()) return;
-      setTables(tables.map(t => t.id === selectedTable.id ? { ...t, name: formData.guestName } : t));
+      await supabase.from('tables').update({ name: formData.guestName }).eq('id', selectedTable.id);
       closeModal();
+      fetchAllData();
       return;
     }
 
@@ -299,6 +350,7 @@ const App = () => {
       return;
     }
     
+    // WALK IN
     if (modalType === 'walkin') {
       const conflictMsg = checkWalkInConflict(selectedTable, Number(formData.duration), formData.isOpenTime);
       if (conflictMsg) { setError(conflictMsg); return; }
@@ -317,28 +369,28 @@ const App = () => {
       }
 
       const deductionAmount = startingReservationId ? RESERVATION_FEE : 0;
-      const estimatedCost = formData.isOpenTime ? 0 : (Number(formData.duration) * HOURLY_RATE);
-
-      setTables(tables.map(t => t.id === selectedTable.id ? { 
-        ...t, 
-        status: 'Occupied', 
-        occupiedUntil: occupiedUntilStr,
-        occupiedUntilRaw: occupiedUntilRaw,
-        sessionType: 'walkin',
-        estimatedCost: estimatedCost,
+      
+      // Update Supabase
+      await supabase.from('tables').update({
+        status: 'Occupied',
+        occupied_until: occupiedUntilStr,
+        occupied_until_raw: occupiedUntilRaw ? occupiedUntilRaw.toISOString() : null,
+        session_type: 'walkin',
         duration: Number(formData.duration),
-        isOpenTime: formData.isOpenTime,
-        currentGuest: formData.guestName,
-        deductible: deductionAmount 
-      } : t));
+        is_open_time: formData.isOpenTime,
+        current_guest: formData.guestName,
+        deductible: deductionAmount
+      }).eq('id', selectedTable.id);
       
       if (startingReservationId) {
-        setReservations(reservations.filter(r => r.id !== startingReservationId));
+        await supabase.from('reservations').delete().eq('id', startingReservationId);
       }
       
       closeModal();
+      fetchAllData();
 
     } 
+    // NEW RESERVATION
     else if (modalType === 'reserve') {
       if (!formData.date || !formData.time) { setError('Select date and time'); return; }
       const [h] = formData.time.split(':').map(Number);
@@ -378,21 +430,22 @@ const App = () => {
         return;
       }
 
+      // Insert to Supabase
       const newReservation = {
-        id: Date.now(),
-        tableName: selectedTable.name,
-        guestName: formData.guestName,
-        rawDate: formData.date,
-        rawTime: formData.time,
-        displayDate: new Date(formData.date).toLocaleDateString(),
-        displayTime: convertTo12Hour(formData.time),
+        table_name: selectedTable.name,
+        guest_name: formData.guestName,
+        raw_date: formData.date,
+        raw_time: formData.time,
+        display_date: new Date(formData.date).toLocaleDateString(),
+        display_time: convertTo12Hour(formData.time),
         type: 'Reservation',
         amount: RESERVATION_FEE
       };
       
-      setReservations([...reservations, newReservation].sort((a,b) => new Date(`${a.rawDate}T${a.rawTime}`) - new Date(`${b.rawDate}T${b.rawTime}`)));
-      addToHistory(newReservation, 'Reserved', RESERVATION_FEE);
+      await supabase.from('reservations').insert([newReservation]);
+      await addToHistory(newReservation, 'Reserved', RESERVATION_FEE);
       closeModal();
+      fetchAllData();
     }
   };
 
@@ -435,7 +488,7 @@ const App = () => {
     tableHeader: darkMode ? 'bg-[#0f172a] text-[#94a3b8]' : 'bg-slate-50 text-slate-500'
   };
 
-  // --- MAIN APP ---
+  // --- MAIN APP RENDER (unchanged, just state binding) ---
   return (
     <div className={`flex h-screen font-sans overflow-hidden transition-colors duration-300 ${theme.bg} ${theme.text}`}>
       
@@ -1040,13 +1093,13 @@ const App = () => {
                   </div>
                   
                   {modalType === 'walkin' && formData.isOpenTime && (() => {
-                     const nextRes = getNextTodayReservation(selectedTable);
-                     if(nextRes) return (
-                       <div className="mt-3 p-3 bg-[#F8D49B]/20 border border-[#F8D49B] rounded-xl text-xs text-[#0f172a]">
-                         <span className="font-bold">Note:</span> Table reserved at {convertTo12Hour(nextRes.rawTime)}.
-                       </div>
-                     );
-                  })()}
+                      const nextRes = getNextTodayReservation(selectedTable);
+                      if(nextRes) return (
+                        <div className="mt-3 p-3 bg-[#F8D49B]/20 border border-[#F8D49B] rounded-xl text-xs text-[#0f172a]">
+                          <span className="font-bold">Note:</span> Table reserved at {convertTo12Hour(nextRes.rawTime)}.
+                        </div>
+                      );
+                   })()}
                 </div>
               )}
 
