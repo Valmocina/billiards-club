@@ -1,17 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { supabase } from './supabase'; // <--- IMPORT SUPABASE CLIENT
+import { supabase } from './supabase'; 
 import { 
   Clock, Calendar, X, Trash2, Edit2, Plus, 
   ArrowLeft, Info, AlertCircle, Infinity, User, 
   LayoutDashboard, Armchair, Settings, LogOut, 
   Search, Bell, Moon, Sun, Monitor, DollarSign,
   CheckCircle, History, TrendingUp, Receipt, Play,
-  Lock, Key, LogIn 
+  Lock, Key, LogIn, Tag, Printer
 } from 'lucide-react';
 
 const App = () => {
   // --- CONSTANTS ---
-  const HOURLY_RATE = 200;
   const RESERVATION_FEE = 50;
 
   // --- AUTH STATE ---
@@ -20,10 +19,11 @@ const App = () => {
   const [loginInput, setLoginInput] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
-  // --- APP STATE (Now starts empty, fills from Supabase) ---
+  // --- APP STATE ---
   const [tables, setTables] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [history, setHistory] = useState([]); 
+  const [hourlyRate, setHourlyRate] = useState(200); 
   
   const [currentView, setCurrentView] = useState('dashboard'); 
   const [darkMode, setDarkMode] = useState(true);
@@ -46,28 +46,26 @@ const App = () => {
   // Settings State
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' });
   const [passwordMsg, setPasswordMsg] = useState({ text: '', type: '' });
+  const [newRateInput, setNewRateInput] = useState(''); 
 
   // --- SUPABASE FETCHING ---
   const fetchAllData = async () => {
-    // 1. Fetch Tables
     const { data: tablesData } = await supabase.from('tables').select('*').order('id', { ascending: true });
     if (tablesData) {
-      // Convert ISO strings back to Date objects for logic to work
       const formattedTables = tablesData.map(t => ({
         ...t,
         occupiedUntilRaw: t.occupied_until_raw ? new Date(t.occupied_until_raw) : null,
         occupiedUntil: t.occupied_until,
         sessionType: t.session_type,
         currentGuest: t.current_guest,
-        isOpenTime: t.is_open_time
+        isOpenTime: t.is_open_time,
+        startTime: t.start_time ? new Date(t.start_time) : null
       }));
       setTables(formattedTables);
     }
 
-    // 2. Fetch Reservations
     const { data: resData } = await supabase.from('reservations').select('*').order('id', { ascending: false });
     if (resData) {
-        // Map Supabase columns to your camelCase state
         const formattedRes = resData.map(r => ({
             ...r,
             tableName: r.table_name,
@@ -80,7 +78,6 @@ const App = () => {
         setReservations(formattedRes);
     }
 
-    // 3. Fetch History
     const { data: histData } = await supabase.from('history').select('*').order('id', { ascending: false });
     if (histData) {
         const formattedHist = histData.map(h => ({
@@ -90,16 +87,79 @@ const App = () => {
         }));
         setHistory(formattedHist);
     }
+
+    const { data: settingsData } = await supabase.from('app_settings').select('*');
+    if (settingsData) {
+      settingsData.forEach(setting => {
+        if (setting.key === 'admin_password') {
+          setAdminCredentials(prev => ({ ...prev, password: setting.value }));
+        }
+        if (setting.key === 'hourly_rate') {
+          setHourlyRate(Number(setting.value));
+          setNewRateInput(setting.value); 
+        }
+      });
+    }
   };
 
-  // Load data on startup
   useEffect(() => {
     fetchAllData();
-    
-    // Optional: Auto-refresh every 5 seconds to see updates from other computers
     const interval = setInterval(fetchAllData, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // --- AUTO-START RESERVATIONS LOGIC ---
+  useEffect(() => {
+    // Run this check every 5 seconds along with data fetch
+    const checkAutoStart = async () => {
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+      const currentTimeVal = now.getHours() * 60 + now.getMinutes();
+
+      // Loop through reservations
+      for (const res of reservations) {
+        if (res.rawDate === todayStr) {
+          const [h, m] = res.rawTime.split(':').map(Number);
+          const resTimeVal = h * 60 + m;
+
+          // If reservation time has arrived (or passed within last 15 mins)
+          if (currentTimeVal >= resTimeVal && (currentTimeVal - resTimeVal) < 15) {
+            
+            // Find the table
+            const table = tables.find(t => t.name === res.tableName);
+            
+            // ONLY start if table is available
+            if (table && table.status === 'Available') {
+              console.log(`Auto-starting reservation for ${res.guestName}`);
+              
+              // 1. Update Table to Occupied
+              const sessionStartTime = new Date();
+              await supabase.from('tables').update({
+                status: 'Occupied',
+                occupied_until: 'Open Time',
+                occupied_until_raw: null,
+                session_type: 'walkin',
+                duration: 0,
+                is_open_time: true, // Auto-start as Open Time
+                current_guest: res.guestName,
+                deductible: RESERVATION_FEE,
+                start_time: sessionStartTime.toISOString()
+              }).eq('id', table.id);
+
+              // 2. Delete Reservation
+              await supabase.from('reservations').delete().eq('id', res.id);
+              
+              // 3. Refresh Data
+              fetchAllData();
+            }
+          }
+        }
+      }
+    };
+
+    const interval = setInterval(checkAutoStart, 5000);
+    return () => clearInterval(interval);
+  }, [reservations, tables]); // Dependencies ensure we have latest data
 
   // --- ACTIONS ---
   const handleLogin = (e) => {
@@ -119,7 +179,7 @@ const App = () => {
     setCurrentView('dashboard');
   };
 
-  const handleChangePassword = () => {
+  const handleChangePassword = async () => {
     if (passwordForm.current !== adminCredentials.password) {
       setPasswordMsg({ text: 'Current password is incorrect.', type: 'error' });
       return;
@@ -133,9 +193,54 @@ const App = () => {
       return;
     }
     
-    setAdminCredentials({ ...adminCredentials, password: passwordForm.new });
-    setPasswordMsg({ text: 'Password updated successfully!', type: 'success' });
-    setPasswordForm({ current: '', new: '', confirm: '' });
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key: 'admin_password', value: passwordForm.new })
+      .select();
+
+    if (error) {
+      setPasswordMsg({ text: 'Error saving password.', type: 'error' });
+    } else {
+      setAdminCredentials({ ...adminCredentials, password: passwordForm.new });
+      setPasswordMsg({ text: 'Password updated successfully!', type: 'success' });
+      setPasswordForm({ current: '', new: '', confirm: '' });
+    }
+  };
+
+  const handleUpdateRate = async () => {
+    const rate = parseInt(newRateInput);
+    if (isNaN(rate) || rate < 0) {
+      alert("Please enter a valid number");
+      return;
+    }
+
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key: 'hourly_rate', value: rate.toString() }) 
+      .select();
+
+    if (error) {
+      alert("Failed to update rate.");
+    } else {
+      setHourlyRate(rate);
+      alert("Hourly rate updated permanently!");
+    }
+  };
+
+  const handleClearHistory = async () => {
+    if (window.confirm("CRITICAL WARNING: This will permanently delete ALL transaction history. This action cannot be undone. Are you sure?")) {
+      const { error } = await supabase.from('history').delete().gt('id', 0);
+      if (error) {
+        alert("Failed to clear history: " + error.message);
+      } else {
+        alert("History Log cleared successfully.");
+        fetchAllData();
+      }
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
   };
 
   const resetForm = () => {
@@ -150,7 +255,6 @@ const App = () => {
     setStartingReservationId(null);
   };
 
-  // Modified to save to Supabase
   const addToHistory = async (item, status, amount = 0) => {
     const newEntry = {
       table_name: item.tableName || item.name,
@@ -163,7 +267,7 @@ const App = () => {
     };
     
     await supabase.from('history').insert([newEntry]);
-    fetchAllData(); // Refresh local state
+    fetchAllData(); 
   };
 
   const handleWalkInClick = (table) => {
@@ -196,20 +300,28 @@ const App = () => {
       date: new Date().toISOString().split('T')[0],
       time: '',
       duration: 1,
-      isOpenTime: false
+      isOpenTime: true // Auto-Select Open Time
     });
     setStartingReservationId(res.id); 
     setShowModal(true);
   };
 
-  // Modified to update Supabase
   const handleFinishSession = async (table) => {
     let cost = 0;
+    
     if (table.sessionType === 'walkin') {
-       if (table.isOpenTime) {
-          cost = HOURLY_RATE; // Simplified logic, usually calculated by time diff
+       if (table.isOpenTime && table.startTime) {
+         const now = new Date();
+         const diffMs = now - table.startTime;
+         const diffMinutes = diffMs / (1000 * 60); 
+
+         if (diffMinutes <= 35) {
+           cost = hourlyRate / 2;
+         } else {
+           cost = (diffMinutes / 60) * hourlyRate;
+         }
        } else {
-          cost = (table.duration || 1) * HOURLY_RATE;
+         cost = (table.duration || 1) * hourlyRate;
        }
     }
 
@@ -217,7 +329,8 @@ const App = () => {
       cost = Math.max(0, cost - table.deductible);
     }
     
-    // Update Supabase: Reset table
+    cost = Math.round(cost);
+
     await supabase.from('tables').update({
         status: 'Available',
         occupied_until: null,
@@ -226,12 +339,12 @@ const App = () => {
         current_guest: null,
         duration: null,
         is_open_time: false,
-        deductible: 0
+        deductible: 0,
+        start_time: null 
     }).eq('id', table.id);
 
-    // Add to history
     await addToHistory({ tableName: table.name, type: 'Walk-In', guestName: table.currentGuest }, 'Completed', cost);
-    fetchAllData(); // Refresh UI
+    fetchAllData(); 
   };
 
   const handleCancelReservation = async (id) => {
@@ -267,7 +380,6 @@ const App = () => {
     setShowModal(true);
   };
 
-  // --- LOGIC HELPER ---
   const getNextTodayReservation = (table) => {
     if (!table) return null;
     const now = new Date();
@@ -332,11 +444,9 @@ const App = () => {
     return `${h}:${minutes} ${ampm}`;
   };
 
-  // --- CORE LOGIC MODIFIED FOR SUPABASE ---
   const handleConfirm = async () => {
     setError('');
     
-    // EDIT TABLE NAME
     if (modalType === 'edit') {
       if (!formData.guestName.trim()) return;
       await supabase.from('tables').update({ name: formData.guestName }).eq('id', selectedTable.id);
@@ -350,7 +460,6 @@ const App = () => {
       return;
     }
     
-    // WALK IN
     if (modalType === 'walkin') {
       const conflictMsg = checkWalkInConflict(selectedTable, Number(formData.duration), formData.isOpenTime);
       if (conflictMsg) { setError(conflictMsg); return; }
@@ -358,19 +467,20 @@ const App = () => {
       let occupiedUntilStr = '';
       let occupiedUntilRaw = null; 
 
+      const sessionStartTime = new Date();
+
       if (formData.isOpenTime) {
         const nextRes = getNextTodayReservation(selectedTable);
         occupiedUntilStr = nextRes ? convertTo12Hour(nextRes.rawTime) : 'Open Time';
         occupiedUntilRaw = nextRes ? nextRes.startObj : null; 
       } else {
-        const endTime = new Date(Date.now() + Number(formData.duration) * 60 * 60 * 1000);
+        const endTime = new Date(sessionStartTime.getTime() + Number(formData.duration) * 60 * 60 * 1000);
         occupiedUntilStr = endTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
         occupiedUntilRaw = endTime;
       }
 
       const deductionAmount = startingReservationId ? RESERVATION_FEE : 0;
       
-      // Update Supabase
       await supabase.from('tables').update({
         status: 'Occupied',
         occupied_until: occupiedUntilStr,
@@ -379,7 +489,8 @@ const App = () => {
         duration: Number(formData.duration),
         is_open_time: formData.isOpenTime,
         current_guest: formData.guestName,
-        deductible: deductionAmount
+        deductible: deductionAmount,
+        start_time: sessionStartTime.toISOString()
       }).eq('id', selectedTable.id);
       
       if (startingReservationId) {
@@ -390,11 +501,8 @@ const App = () => {
       fetchAllData();
 
     } 
-    // NEW RESERVATION
     else if (modalType === 'reserve') {
       if (!formData.date || !formData.time) { setError('Select date and time'); return; }
-      const [h] = formData.time.split(':').map(Number);
-      if (h < 7) { setError('Reservations allow 7 AM - 11:59 PM.'); return; }
       
       if (selectedTable.status === 'Occupied' && selectedTable.occupiedUntilRaw) {
         const reservationStart = new Date(`${formData.date}T${formData.time}`);
@@ -422,15 +530,14 @@ const App = () => {
         if (r.tableName !== selectedTable.name || r.rawDate !== formData.date) return false;
         const existingResTime = new Date(`${r.rawDate}T${r.rawTime}`);
         const diffInMs = Math.abs(newResTime - existingResTime);
-        return (diffInMs / (1000 * 60)) < 20;
+        return (diffInMs / (1000 * 60)) < 60;
       });
 
       if (conflictReservation) {
-        setError(`Conflict! Too close to reservation at ${conflictReservation.displayTime}. Must be 20 mins apart.`);
+        setError(`Conflict! Too close to reservation at ${conflictReservation.displayTime}. Must be 1 hour apart.`);
         return;
       }
 
-      // Insert to Supabase
       const newReservation = {
         table_name: selectedTable.name,
         guest_name: formData.guestName,
@@ -480,7 +587,7 @@ const App = () => {
     bg: darkMode ? 'bg-[#0f172a]' : 'bg-[#f8fafc]',
     text: darkMode ? 'text-[#f1f5f9]' : 'text-[#0f172a]',
     textMuted: darkMode ? 'text-[#94a3b8]' : 'text-[#64748b]',
-    sidebar: darkMode ? 'bg-[#1e293b] border-[#334155]' : 'bg-white border-slate-200',
+    sidebar: 'bg-[#1e293b] border-[#334155]', 
     card: darkMode ? 'bg-[#1e293b] border-[#334155]' : 'bg-white border-slate-200',
     input: darkMode ? 'bg-[#0f172a] border-[#334155] text-white' : 'bg-white border-slate-200 text-[#0f172a]',
     header: darkMode ? 'bg-[#1e293b]/50 border-[#334155]' : 'bg-white/80 border-slate-200',
@@ -488,94 +595,91 @@ const App = () => {
     tableHeader: darkMode ? 'bg-[#0f172a] text-[#94a3b8]' : 'bg-slate-50 text-slate-500'
   };
 
-  // --- MAIN APP RENDER (unchanged, just state binding) ---
   return (
     <div className={`flex h-screen font-sans overflow-hidden transition-colors duration-300 ${theme.bg} ${theme.text}`}>
       
-      {/* --- SIDEBAR --- */}
-      <aside className={`w-64 border-r flex flex-col hidden md:flex ${theme.sidebar}`}>
-        <div className="p-6 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#75BDE0] to-[#F8BC9B] flex items-center justify-center text-[#0f172a] font-bold text-sm shadow-lg shrink-0">B&C</div>
-          <div>
-            <h1 className={`text-lg font-bold leading-tight ${theme.text}`}>Manager</h1>
+      <aside className={`w-72 flex flex-col hidden md:flex ${theme.sidebar} relative shadow-xl print:hidden`}>
+        <div className="pt-10 pb-8 px-8 flex items-center gap-4">
+          <h1 className="text-4xl font-black bg-gradient-to-r from-blue-300 to-pink-300 bg-clip-text text-transparent tracking-tighter">B&C</h1>
+          <div className="w-[1px] h-10 bg-slate-500/50"></div>
+          <div className="flex flex-col justify-center">
+            <span className="text-white font-bold leading-none text-base">Club</span>
+            <span className="text-white font-bold leading-none text-base">Manager</span>
           </div>
         </div>
 
-        <nav className="flex-1 px-4 space-y-2 mt-4">
+        <nav className="flex-1 px-6 space-y-3 mt-4">
           <button 
             onClick={() => setCurrentView('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+            className={`w-full flex items-center gap-4 px-6 py-4 rounded-xl transition-all font-bold text-base shadow-lg ${
               currentView === 'dashboard' 
-                ? 'bg-[#75BDE0] text-[#0f172a] font-bold shadow-lg shadow-[#75BDE0]/20' 
-                : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+                ? 'bg-[#7dd3fc] text-[#0f172a] hover:bg-[#38bdf8]' 
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
             }`}
           >
-            <LayoutDashboard className="w-5 h-5" /> Dashboard
+            <LayoutDashboard className="w-6 h-6" /> Dashboard
           </button>
           
-          {/* Admin Only Links */}
           {isAuthenticated && (
             <>
               <button 
                 onClick={() => setCurrentView('management')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                className={`w-full flex items-center gap-4 px-6 py-4 rounded-xl transition-all font-bold text-base ${
                   currentView === 'management' 
-                    ? 'bg-[#F8D49B] text-[#0f172a] font-bold shadow-lg shadow-[#F8D49B]/20' 
-                    : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+                    ? 'bg-[#F8D49B] text-[#0f172a] shadow-lg' 
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
-                <Armchair className="w-5 h-5" /> Tables
+                <Armchair className="w-6 h-6" /> Tables
               </button>
 
               <button 
                 onClick={() => setCurrentView('earnings')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                className={`w-full flex items-center gap-4 px-6 py-4 rounded-xl transition-all font-bold text-base ${
                   currentView === 'earnings' 
-                    ? 'bg-[#F89B9B] text-[#0f172a] font-bold shadow-lg shadow-[#F89B9B]/20' 
-                    : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+                    ? 'bg-[#F89B9B] text-[#0f172a] shadow-lg' 
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
-                <DollarSign className="w-5 h-5" /> Earnings
+                <DollarSign className="w-6 h-6" /> Earnings
               </button>
 
               <button 
                 onClick={() => setCurrentView('settings')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                className={`w-full flex items-center gap-4 px-6 py-4 rounded-xl transition-all font-bold text-base ${
                   currentView === 'settings' 
-                    ? 'bg-[#F8BC9B] text-[#0f172a] font-bold shadow-lg shadow-[#F8BC9B]/20' 
-                    : `${theme.textMuted} hover:bg-slate-100/10 hover:${theme.text}`
+                    ? 'bg-[#cbd5e1] text-[#0f172a] shadow-lg' 
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
-                <Settings className="w-5 h-5" /> Settings
+                <Settings className="w-6 h-6" /> Settings
               </button>
             </>
           )}
         </nav>
 
-        <div className={`p-4 border-t ${darkMode ? 'border-[#334155]' : 'border-slate-200'}`}>
+        <div className="p-8 mt-auto border-t border-slate-700/50">
           {isAuthenticated ? (
             <button 
               onClick={handleLogout}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#F89B9B] hover:bg-[#F89B9B]/10 transition-all font-medium"
+              className="flex items-center gap-3 text-red-400 hover:text-red-300 font-medium transition-colors"
             >
               <LogOut className="w-5 h-5" /> Logout
             </button>
           ) : (
             <button 
               onClick={() => setCurrentView('login')}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#75BDE0] hover:bg-[#75BDE0]/10 transition-all font-medium"
+              className="flex items-center gap-3 text-sky-400 hover:text-sky-300 font-medium transition-colors group"
             >
-              <LogIn className="w-5 h-5" /> Admin Login
+              <LogIn className="w-5 h-5 group-hover:translate-x-1 transition-transform" /> Admin Login
             </button>
           )}
         </div>
       </aside>
 
-      {/* --- MAIN CONTENT --- */}
       <main className="flex-1 flex flex-col overflow-hidden">
         
-        {/* Top Header */}
-        <header className={`h-20 backdrop-blur-sm border-b flex items-center justify-between px-8 ${theme.header}`}>
+        <header className={`h-20 backdrop-blur-sm border-b flex items-center justify-between px-8 ${theme.header} print:hidden`}>
           <h2 className={`text-2xl font-bold ${theme.text}`}>
             {currentView === 'login' ? 'Authentication' : currentView.charAt(0).toUpperCase() + currentView.slice(1)}
           </h2>
@@ -592,15 +696,11 @@ const App = () => {
           </div>
         </header>
 
-        {/* Content Scroll Area */}
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-8 print:p-0">
           
-          {/* DASHBOARD VIEW (Publicly Visible) */}
           {currentView === 'dashboard' && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 max-w-7xl mx-auto">
-              
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 max-w-7xl mx-auto print:hidden">
               <div className="xl:col-span-2 space-y-6">
-                {/* Dashboard Title Header */}
                 <div className="text-center mb-8 xl:text-left xl:mb-0">
                   <p className={`${theme.textMuted} text-lg`}>Reserve your table for the perfect game</p>
                 </div>
@@ -646,7 +746,6 @@ const App = () => {
                       <div className="flex gap-3 pt-2">
                         {table.status === 'Available' ? (
                           <>
-                            {/* Client can reserve, only Admin can Walk-In */}
                             <button onClick={() => handleReserveClick(table)} className="flex-1 py-2.5 rounded-lg bg-[#75BDE0] hover:bg-[#64a9cc] text-white text-sm font-bold shadow-md shadow-[#75BDE0]/20 transition-all active:scale-95">Reserve</button>
                             {isAuthenticated && (
                               <button onClick={() => handleWalkInClick(table)} className="flex-1 py-2.5 rounded-lg bg-[#F8BC9B] hover:bg-[#e6ab8c] text-white text-sm font-bold shadow-md shadow-[#F8BC9B]/20 transition-all active:scale-95">Walk-In</button>
@@ -711,7 +810,6 @@ const App = () => {
                           </div>
                           <div className="text-right flex flex-col items-end gap-1">
                             <p className="text-[#F8D49B] font-bold text-sm">{res.displayTime}</p>
-                            {/* Admin only actions */}
                             {isAuthenticated && (
                               <div className="flex gap-2">
                                 <button 
@@ -738,7 +836,6 @@ const App = () => {
             </div>
           )}
 
-          {/* LOGIN VIEW */}
           {currentView === 'login' && (
             <div className="flex items-center justify-center h-full">
               <div className={`w-full max-w-md p-8 rounded-3xl shadow-2xl border ${theme.card} animate-in fade-in zoom-in-95`}>
@@ -789,10 +886,9 @@ const App = () => {
             </div>
           )}
 
-          {/* EARNINGS VIEW (Protected) */}
           {currentView === 'earnings' && isAuthenticated && (
             <div className="max-w-7xl mx-auto space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden">
                 <div className={`${theme.card} p-6 rounded-3xl border flex items-center gap-4`}>
                   <div className="w-16 h-16 rounded-full bg-[#75BDE0]/20 flex items-center justify-center">
                     <DollarSign className="w-8 h-8 text-[#75BDE0]" />
@@ -822,8 +918,28 @@ const App = () => {
                 </div>
               </div>
 
-              <div className={`${theme.card} rounded-3xl p-8 border`}>
-                <h3 className={`text-xl font-bold mb-6 ${theme.text}`}>Recent Transactions</h3>
+              <div className={`${theme.card} rounded-3xl p-8 border print:border-none print:p-0 print:shadow-none`}>
+                <div className="flex items-center justify-between mb-6 print:mb-4">
+                  <h3 className={`text-xl font-bold ${theme.text}`}>Recent Transactions</h3>
+                  <div className="flex items-center gap-4 print:hidden">
+                    <div className="text-red-400 text-xs font-bold flex items-center gap-1 bg-red-500/10 px-2 py-1 rounded">
+                      <AlertCircle className="w-3 h-3" /> Warning: Deletion is permanent
+                    </div>
+                    <button 
+                      onClick={handleClearHistory} 
+                      className="flex items-center gap-2 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-bold transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" /> Clear All
+                    </button>
+                    <button 
+                      onClick={handlePrint}
+                      className="flex items-center gap-2 px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-bold transition-colors"
+                    >
+                      <Printer className="w-4 h-4" /> Print
+                    </button>
+                  </div>
+                </div>
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-left">
                     <thead className={`${theme.tableHeader} border-b ${darkMode ? 'border-[#334155]' : 'border-slate-200'}`}>
@@ -865,7 +981,6 @@ const App = () => {
             </div>
           )}
 
-          {/* MANAGEMENT VIEW (Protected) */}
           {currentView === 'management' && isAuthenticated && (
             <div className={`max-w-4xl mx-auto rounded-3xl p-8 border ${theme.card}`}>
               <div className="flex items-center justify-between mb-8">
@@ -901,7 +1016,6 @@ const App = () => {
             </div>
           )}
 
-          {/* SETTINGS VIEW (Protected) */}
           {currentView === 'settings' && isAuthenticated && (
             <div className={`max-w-4xl mx-auto rounded-3xl p-8 border ${theme.card}`}>
               <div className="flex items-center justify-between mb-8">
@@ -910,7 +1024,32 @@ const App = () => {
               </div>
 
               <div className="space-y-6">
-                {/* Account Management */}
+                
+                {/* PRICING SETTINGS */}
+                <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
+                  <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
+                    <Tag className="w-5 h-5 text-[#F89B9B]" /> Pricing Configuration
+                  </h4>
+                  <div className="max-w-md">
+                    <label className={`block text-sm font-bold mb-2 ${theme.textMuted}`}>Hourly Rate (PHP)</label>
+                    <div className="flex gap-4">
+                      <input 
+                        type="number"
+                        value={newRateInput}
+                        onChange={(e) => setNewRateInput(e.target.value)}
+                        className={`flex-1 p-3 rounded-xl border outline-none ${theme.input}`}
+                      />
+                      <button 
+                        onClick={handleUpdateRate}
+                        className="px-6 bg-[#F89B9B] text-[#0f172a] font-bold rounded-xl shadow-lg hover:opacity-90 transition-all"
+                      >
+                        Update
+                      </button>
+                    </div>
+                    <p className={`text-xs mt-2 ${theme.textMuted}`}>Current active rate: ₱{hourlyRate}/hr</p>
+                  </div>
+                </div>
+
                 <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
                   <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
                     <Key className="w-5 h-5 text-[#F8BC9B]" /> Change Password
@@ -951,7 +1090,6 @@ const App = () => {
                   </div>
                 </div>
 
-                {/* Appearance */}
                 <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
                   <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
                     <Monitor className="w-5 h-5 text-[#F8BC9B]" /> Appearance
@@ -972,7 +1110,6 @@ const App = () => {
                   </div>
                 </div>
 
-                {/* History Log */}
                 <div className={`p-6 rounded-2xl border ${theme.subCard}`}>
                   <h4 className={`text-lg font-bold mb-4 flex items-center gap-2 ${theme.text}`}>
                     <History className="w-5 h-5 text-[#F89B9B]" /> History Log
@@ -1000,7 +1137,6 @@ const App = () => {
         </div>
       </main>
 
-      {/* --- MODAL --- */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
@@ -1083,7 +1219,7 @@ const App = () => {
                   <div className="mt-4 p-3 bg-orange-50 text-orange-600 rounded-xl text-xs font-bold flex justify-between items-center">
                     <div>
                       <span>Hourly Rate:</span>
-                      <span className="ml-2">₱{HOURLY_RATE}/hr</span>
+                      <span className="ml-2">₱{hourlyRate}/hr</span>
                     </div>
                     {startingReservationId && (
                       <span className="text-green-600 bg-green-100 px-2 py-1 rounded">
@@ -1092,14 +1228,21 @@ const App = () => {
                     )}
                   </div>
                   
-                  {modalType === 'walkin' && formData.isOpenTime && (() => {
+                  {modalType === 'walkin' && (() => {
                       const nextRes = getNextTodayReservation(selectedTable);
-                      if(nextRes) return (
-                        <div className="mt-3 p-3 bg-[#F8D49B]/20 border border-[#F8D49B] rounded-xl text-xs text-[#0f172a]">
-                          <span className="font-bold">Note:</span> Table reserved at {convertTo12Hour(nextRes.rawTime)}.
-                        </div>
-                      );
-                   })()}
+                      if (nextRes) {
+                        const now = new Date();
+                        const diffMs = nextRes.startObj - now;
+                        return (
+                          <div className="mt-3 p-3 bg-[#75BDE0]/20 border border-[#75BDE0] rounded-xl text-xs text-[#0f172a]">
+                            <p className="font-bold flex items-center gap-1"><Info className="w-3 h-3"/> Upcoming Reservation</p>
+                            <p>Next reservation is at <strong>{convertTo12Hour(nextRes.rawTime)}</strong>.</p>
+                            <p>You have <strong>{formatDuration(diffMs)}</strong> available to play.</p>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                 </div>
               )}
 
